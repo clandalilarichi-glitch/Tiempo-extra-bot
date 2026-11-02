@@ -866,6 +866,65 @@ async function mostrarClasificacion(interaction) {
   });
 }
 
+// MOSTRAR JORNADAS
+async function mostrarJornadas(interaction) {
+  const jornadas = configuracionJornadas.jornadas || {};
+  const activa = configuracionJornadas.jornadaActiva;
+  const pendiente = configuracionJornadas.jornadaPendiente;
+
+  const embed = new EmbedBuilder()
+    .setColor(0x00AEEF)
+    .setTitle('⚽ JORNADAS | TIEMPO EXTRA')
+    .setDescription('Consulta las jornadas registradas en el sistema.');
+
+  const lista = Object.entries(jornadas);
+
+  if (lista.length === 0) {
+    embed.addFields({
+      name: '📭 Sin jornadas',
+      value: 'Todavía no hay jornadas registradas.'
+    });
+  } else {
+    for (const [id, jornada] of lista) {
+      const esActiva = id === activa;
+      const resultado = quinielasGuardadas._resultados?.[id];
+
+      let estado = esActiva ? '🟢 ACTIVA' : '⚪ ANTERIOR';
+
+      if (resultado?.jornadaFinalizada) {
+        estado = '🏁 FINALIZADA';
+      }
+
+      embed.addFields({
+        name: `${esActiva ? '🟢' : '📋'} ${jornada.nombre || id}`,
+        value:
+          `**Estado:** ${estado}\n` +
+          `**Partidos:** ${jornada.partidos?.length || 0}\n` +
+          `**Fecha de activación:** ${
+            jornada.fechaActivacion
+              ? new Date(jornada.fechaActivacion).toLocaleDateString('es-ES')
+              : 'No registrada'
+          }\n` +
+          `**ID:** \`${id}\``
+      });
+    }
+  }
+
+  if (pendiente) {
+    embed.addFields({
+      name: '⏳ Jornada pendiente',
+      value:
+        `**${pendiente.datos.nombre}**\n` +
+        'Estado: Pendiente de aprobación.'
+    });
+  }
+
+  await interaction.reply({
+    embeds: [embed],
+    ephemeral: false
+  });
+}
+
 // BOT CONECTADO Y DIAGNÓSTICO FADEHOST
 client.once(Events.ClientReady, () => {
   try {
@@ -988,6 +1047,12 @@ client.on(Events.InteractionCreate, async interaction => {
 
       if (interaction.commandName === 'clasificacion') {
         await mostrarClasificacion(interaction);
+        return;
+      }
+
+      // NUEVO COMANDO /JORNADAS
+      if (interaction.commandName === 'jornadas') {
+        await mostrarJornadas(interaction);
         return;
       }
 
