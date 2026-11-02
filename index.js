@@ -876,7 +876,6 @@ client.once(Events.ClientReady, () => {
     console.log('📂 Directorio actual:', process.cwd());
     console.log('📂 __dirname:', __dirname);
 
-    // COMPROBAR /data
     console.log(
       '📂 Contenido de /data:',
       fs.existsSync('/data')
@@ -884,7 +883,6 @@ client.once(Events.ClientReady, () => {
         : 'NO EXISTE'
     );
 
-    // COMPROBAR /data/storage
     console.log(
       '📂 Contenido de /data/storage:',
       fs.existsSync('/data/storage')
@@ -892,7 +890,6 @@ client.once(Events.ClientReady, () => {
         : 'NO EXISTE'
     );
 
-    // COMPROBAR /data/app
     console.log(
       '📂 Contenido de /data/app:',
       fs.existsSync('/data/app')
@@ -900,7 +897,13 @@ client.once(Events.ClientReady, () => {
         : 'NO EXISTE'
     );
 
-    // COMPROBAR CARPETA DEL PROYECTO
+    console.log(
+      '📂 Contenido de /data/app/storage:',
+      fs.existsSync('/data/app/storage')
+        ? fs.readdirSync('/data/app/storage')
+        : 'NO EXISTE'
+    );
+
     console.log(
       '📂 Contenido de la carpeta del proyecto:',
       fs.existsSync(__dirname)
@@ -908,7 +911,6 @@ client.once(Events.ClientReady, () => {
         : 'NO EXISTE'
     );
 
-    // COMPROBAR LOS ARCHIVOS
     console.log(
       '🔎 Existe quinielas.json:',
       fs.existsSync(ARCHIVO)
