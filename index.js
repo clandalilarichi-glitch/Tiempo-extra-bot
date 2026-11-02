@@ -874,6 +874,7 @@ client.once(Events.ClientReady, () => {
     console.log('📄 ARCHIVO:', ARCHIVO);
     console.log('📄 ARCHIVO_JORNADAS:', ARCHIVO_JORNADAS);
     console.log('📂 Directorio actual:', process.cwd());
+    console.log('📂 __dirname:', __dirname);
 
     // COMPROBAR /data
     console.log(
@@ -891,6 +892,22 @@ client.once(Events.ClientReady, () => {
         : 'NO EXISTE'
     );
 
+    // COMPROBAR /data/app
+    console.log(
+      '📂 Contenido de /data/app:',
+      fs.existsSync('/data/app')
+        ? fs.readdirSync('/data/app')
+        : 'NO EXISTE'
+    );
+
+    // COMPROBAR CARPETA DEL PROYECTO
+    console.log(
+      '📂 Contenido de la carpeta del proyecto:',
+      fs.existsSync(__dirname)
+        ? fs.readdirSync(__dirname)
+        : 'NO EXISTE'
+    );
+
     // COMPROBAR LOS ARCHIVOS
     console.log(
       '🔎 Existe quinielas.json:',
@@ -904,7 +921,6 @@ client.once(Events.ClientReady, () => {
 
     console.log('========================================');
 
-    // COMPROBAR LOS DOS ARCHIVOS
     if (!fs.existsSync(ARCHIVO)) {
       throw new Error(`No existe quinielas.json en: ${ARCHIVO}`);
     }
