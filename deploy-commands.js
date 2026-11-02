@@ -99,6 +99,11 @@ const repartirPremios = new SlashCommandBuilder()
   .setDescription('Reparte los premios del podio')
   .setDefaultMemberPermissions(PermissionFlagsBits.Administrator);
 
+// COMANDO JORNADAS
+const jornadas = new SlashCommandBuilder()
+  .setName('jornadas')
+  .setDescription('Consulta las jornadas activas y anteriores');
+
 // RESTO DE COMANDOS
 const comandos = [
   new SlashCommandBuilder()
@@ -113,6 +118,7 @@ const comandos = [
     .setName('clasificacion')
     .setDescription('Consulta la clasificación de la jornada'),
 
+  jornadas,
   resultados,
   crearJornada,
   repartirPremios
@@ -134,7 +140,7 @@ async function registrarComandos() {
       { body: comandos }
     );
 
-    console.log('✅ Los 6 comandos se han registrado correctamente.');
+    console.log('✅ Los 7 comandos se han registrado correctamente.');
   } catch (error) {
     console.error('❌ Error registrando comandos:', error);
   }
