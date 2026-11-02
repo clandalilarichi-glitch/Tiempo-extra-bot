@@ -19,7 +19,7 @@ const client = new Client({
 });
 
 // ALMACENAMIENTO PERSISTENTE FADEHOST
-const DATA_DIR = process.env.DATA_DIR || __dirname;
+const DATA_DIR = path.join(__dirname, 'storage');
 
 const ARCHIVO = path.join(DATA_DIR, 'quinielas.json');
 const ARCHIVO_JORNADAS = path.join(DATA_DIR, 'jornadas.json');
