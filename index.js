@@ -1,3 +1,4 @@
+
 const fs = require('fs');
 const path = require('path');
 
@@ -38,7 +39,7 @@ const pronosticos = new Map();
 // CARGAR Y VALIDAR LA JORNADA ACTIVA
 function cargarConfiguracionJornadas() {
   if (!fs.existsSync(ARCHIVO_JORNADAS)) {
-    throw new Error('No existe el archivo jornadas.json.');
+    throw new Error(`No existe el archivo: ${ARCHIVO_JORNADAS}`);
   }
 
   configuracionJornadas = JSON.parse(
@@ -88,13 +89,21 @@ function guardarConfiguracionJornadas() {
 
 // CARGAR DATOS DE QUINIELAS
 function cargarQuinielas() {
+  if (!fs.existsSync(ARCHIVO)) {
+    throw new Error(`No existe el archivo: ${ARCHIVO}`);
+  }
+
   try {
-    if (fs.existsSync(ARCHIVO)) {
-      quinielasGuardadas = JSON.parse(
-        fs.readFileSync(ARCHIVO, 'utf8')
-      );
-    } else {
-      fs.writeFileSync(ARCHIVO, '{}');
+    quinielasGuardadas = JSON.parse(
+      fs.readFileSync(ARCHIVO, 'utf8')
+    );
+
+    if (
+      !quinielasGuardadas ||
+      typeof quinielasGuardadas !== 'object' ||
+      Array.isArray(quinielasGuardadas)
+    ) {
+      throw new Error('El contenido de quinielas.json no es válido.');
     }
 
     if (!quinielasGuardadas._resultados) {
@@ -860,9 +869,18 @@ async function mostrarClasificacion(interaction) {
 // BOT CONECTADO
 client.once(Events.ClientReady, () => {
   try {
-    // Comprobar que existe el almacenamiento
-    if (!fs.existsSync(DATA_DIR)) {
-      throw new Error(`No existe el directorio de datos: ${DATA_DIR}`);
+    // CREAR LA CARPETA SI NO EXISTE
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+
+    console.log(`📁 Directorio de datos: ${DATA_DIR}`);
+
+    // COMPROBAR QUE LOS DOS ARCHIVOS EXISTEN
+    if (!fs.existsSync(ARCHIVO)) {
+      throw new Error(`No existe quinielas.json en: ${ARCHIVO}`);
+    }
+
+    if (!fs.existsSync(ARCHIVO_JORNADAS)) {
+      throw new Error(`No existe jornadas.json en: ${ARCHIVO_JORNADAS}`);
     }
 
     cargarConfiguracionJornadas();
