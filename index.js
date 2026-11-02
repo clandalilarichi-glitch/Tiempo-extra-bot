@@ -885,7 +885,7 @@ async function mostrarJornadas(interaction) {
       value: 'Todavía no hay jornadas registradas.'
     });
   } else {
-    for (const [id, jornada] of lista) {
+    for (const [id, jornada] of lista.slice(0, 24)) {
       const esActiva = id === activa;
       const resultado = quinielasGuardadas._resultados?.[id];
 
@@ -910,7 +910,7 @@ async function mostrarJornadas(interaction) {
     }
   }
 
-  if (pendiente) {
+  if (pendiente && embed.data.fields.length < 25) {
     embed.addFields({
       name: '⏳ Jornada pendiente',
       value:
@@ -923,6 +923,156 @@ async function mostrarJornadas(interaction) {
     embeds: [embed],
     ephemeral: false
   });
+}
+
+// MOSTRAR MENÚ PARA ELIMINAR JORNADA
+async function mostrarEliminarJornada(interaction) {
+  if (!esAdministrador(interaction)) {
+    await interaction.reply({
+      content: '⛔ Solo los administradores pueden eliminar jornadas.',
+      ephemeral: true
+    });
+    return;
+  }
+
+  const jornadas = Object.entries(
+    configuracionJornadas.jornadas || {}
+  );
+
+  if (jornadas.length <= 1) {
+    await interaction.reply({
+      content: '⚠️ Necesitas tener al menos dos jornadas registradas para eliminar una.',
+      ephemeral: true
+    });
+    return;
+  }
+
+  const menu = new StringSelectMenuBuilder()
+    .setCustomId('seleccionar_eliminar_jornada')
+    .setPlaceholder('Selecciona la jornada que quieres eliminar')
+    .addOptions(
+      jornadas.slice(0, 25).map(([id, jornada]) => ({
+        label: (jornada.nombre || id).slice(0, 100),
+        description: id.slice(0, 100),
+        value: id
+      }))
+    );
+
+  await interaction.reply({
+    content: '🗑️ **ELIMINAR JORNADA**\nSelecciona la jornada que deseas borrar.',
+    components: [
+      new ActionRowBuilder().addComponents(menu)
+    ],
+    ephemeral: true
+  });
+}
+
+// ELIMINAR JORNADA SELECCIONADA
+async function confirmarEliminarJornada(interaction, id) {
+  if (!esAdministrador(interaction)) {
+    await interaction.reply({
+      content: '⛔ No tienes permiso para eliminar jornadas.',
+      ephemeral: true
+    });
+    return;
+  }
+
+  const jornada = configuracionJornadas.jornadas?.[id];
+
+  if (!jornada) {
+    await interaction.update({
+      content: '⚠️ Esa jornada ya no existe.',
+      components: []
+    });
+    return;
+  }
+
+  if (Object.keys(configuracionJornadas.jornadas).length <= 1) {
+    await interaction.update({
+      content: '⚠️ No puedes eliminar la última jornada registrada.',
+      components: []
+    });
+    return;
+  }
+
+  const esActiva = configuracionJornadas.jornadaActiva === id;
+
+  // PREPARAR UNA NUEVA JORNADA ACTIVA SI ES NECESARIO
+  let nuevaActiva = null;
+
+  if (esActiva) {
+    const restantes = Object.entries(
+      configuracionJornadas.jornadas
+    ).filter(([otroId]) => otroId !== id);
+
+    restantes.sort((a, b) =>
+      new Date(b[1].fechaActivacion || 0) -
+      new Date(a[1].fechaActivacion || 0)
+    );
+
+    nuevaActiva = restantes[0][0];
+  }
+
+  // DESCONTAR LAS MONEDAS Y PREMIOS GANADOS EN ESA JORNADA
+  const participantes = quinielasGuardadas[id] || {};
+
+  for (const [userId, apuesta] of Object.entries(participantes)) {
+    const monedasGanadas = Number(apuesta.monedas || 0);
+    const premio = Number(apuesta.premioJornada || 0);
+    const descuento = monedasGanadas + premio;
+
+    const saldo = Number(quinielasGuardadas._saldos[userId] || 0);
+
+    quinielasGuardadas._saldos[userId] =
+      Math.max(0, saldo - descuento);
+  }
+
+  // ELIMINAR PRONÓSTICOS Y RESULTADOS
+  delete quinielasGuardadas[id];
+
+  if (quinielasGuardadas._resultados) {
+    delete quinielasGuardadas._resultados[id];
+  }
+
+  // ELIMINAR LA JORNADA
+  delete configuracionJornadas.jornadas[id];
+
+  // CAMBIAR LA JORNADA ACTIVA SI SE HA ELIMINADO
+  if (esActiva && nuevaActiva) {
+    configuracionJornadas.jornadaActiva = nuevaActiva;
+  }
+
+  try {
+    guardarConfiguracionJornadas();
+    guardarQuinielas();
+
+    cargarConfiguracionJornadas();
+    pronosticos.clear();
+
+    await interaction.update({
+      content:
+        `🗑️ **Jornada eliminada correctamente.**\n\n` +
+        `⚽ Jornada eliminada: **${jornada.nombre || id}**\n` +
+        (
+          esActiva
+            ? `🟢 Nueva jornada activa: **${NOMBRE_JORNADA}**`
+            : '✅ La jornada activa no ha cambiado.'
+        ) +
+        `\n💰 Se han ajustado las monedas ganadas en esa jornada.`,
+      embeds: [],
+      components: []
+    });
+
+    console.log(`🗑️ Jornada eliminada: ${id}`);
+  } catch (error) {
+    console.error('Error eliminando jornada:', error);
+
+    await interaction.update({
+      content: '❌ Ha ocurrido un error al guardar los cambios. Revisa los archivos JSON antes de volver a intentarlo.',
+      embeds: [],
+      components: []
+    }).catch(() => {});
+  }
 }
 
 // BOT CONECTADO Y DIAGNÓSTICO FADEHOST
@@ -1050,9 +1200,13 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      // NUEVO COMANDO /JORNADAS
       if (interaction.commandName === 'jornadas') {
         await mostrarJornadas(interaction);
+        return;
+      }
+
+      if (interaction.commandName === 'eliminarjornada') {
+        await mostrarEliminarJornada(interaction);
         return;
       }
 
@@ -1180,7 +1334,84 @@ client.on(Events.InteractionCreate, async interaction => {
       return;
     }
 
-    // MENÚS DE SELECCIÓN
+    // SELECTOR DE JORNADA PARA ELIMINAR
+    if (
+      interaction.isStringSelectMenu() &&
+      interaction.customId === 'seleccionar_eliminar_jornada'
+    ) {
+      if (!esAdministrador(interaction)) {
+        await interaction.reply({
+          content: '⛔ No tienes permiso.',
+          ephemeral: true
+        });
+        return;
+      }
+
+      const id = interaction.values[0];
+      const jornada = configuracionJornadas.jornadas?.[id];
+
+      if (!jornada) {
+        await interaction.update({
+          content: '⚠️ La jornada ya no existe.',
+          components: []
+        });
+        return;
+      }
+
+      const botones = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`confirmar_eliminar:${id}`)
+          .setLabel('Sí, eliminar')
+          .setStyle(ButtonStyle.Danger),
+
+        new ButtonBuilder()
+          .setCustomId('cancelar_eliminar')
+          .setLabel('Cancelar')
+          .setStyle(ButtonStyle.Secondary)
+      );
+
+      await interaction.update({
+        content:
+          `⚠️ **¿Estás seguro de eliminar esta jornada?**\n\n` +
+          `⚽ Jornada: **${jornada.nombre || id}**\n` +
+          `Se borrarán sus pronósticos, resultados y recompensas asociadas.`,
+        components: [botones]
+      });
+
+      return;
+    }
+
+    // CONFIRMAR O CANCELAR ELIMINACIÓN
+    if (
+      interaction.isButton() &&
+      (
+        interaction.customId.startsWith('confirmar_eliminar:') ||
+        interaction.customId === 'cancelar_eliminar'
+      )
+    ) {
+      if (!esAdministrador(interaction)) {
+        await interaction.reply({
+          content: '⛔ No tienes permiso.',
+          ephemeral: true
+        });
+        return;
+      }
+
+      if (interaction.customId === 'cancelar_eliminar') {
+        await interaction.update({
+          content: '✅ Eliminación cancelada.',
+          components: []
+        });
+        return;
+      }
+
+      const id = interaction.customId.split(':')[1];
+
+      await confirmarEliminarJornada(interaction, id);
+      return;
+    }
+
+    // MENÚS DE SELECCIÓN DE QUINIELA
     if (interaction.isStringSelectMenu()) {
       if (quinielasGuardadas._resultados[JORNADA]) {
         await interaction.reply({
