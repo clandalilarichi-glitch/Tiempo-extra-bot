@@ -866,15 +866,45 @@ async function mostrarClasificacion(interaction) {
   });
 }
 
-// BOT CONECTADO
+// BOT CONECTADO Y DIAGNÓSTICO FADEHOST
 client.once(Events.ClientReady, () => {
   try {
-    // CREAR LA CARPETA SI NO EXISTE
-    fs.mkdirSync(DATA_DIR, { recursive: true });
+    console.log('========== DIAGNÓSTICO FADEHOST ==========');
+    console.log('📁 DATA_DIR:', DATA_DIR);
+    console.log('📄 ARCHIVO:', ARCHIVO);
+    console.log('📄 ARCHIVO_JORNADAS:', ARCHIVO_JORNADAS);
+    console.log('📂 Directorio actual:', process.cwd());
 
-    console.log(`📁 Directorio de datos: ${DATA_DIR}`);
+    // COMPROBAR /data
+    console.log(
+      '📂 Contenido de /data:',
+      fs.existsSync('/data')
+        ? fs.readdirSync('/data')
+        : 'NO EXISTE'
+    );
 
-    // COMPROBAR QUE LOS DOS ARCHIVOS EXISTEN
+    // COMPROBAR /data/storage
+    console.log(
+      '📂 Contenido de /data/storage:',
+      fs.existsSync('/data/storage')
+        ? fs.readdirSync('/data/storage')
+        : 'NO EXISTE'
+    );
+
+    // COMPROBAR LOS ARCHIVOS
+    console.log(
+      '🔎 Existe quinielas.json:',
+      fs.existsSync(ARCHIVO)
+    );
+
+    console.log(
+      '🔎 Existe jornadas.json:',
+      fs.existsSync(ARCHIVO_JORNADAS)
+    );
+
+    console.log('========================================');
+
+    // COMPROBAR LOS DOS ARCHIVOS
     if (!fs.existsSync(ARCHIVO)) {
       throw new Error(`No existe quinielas.json en: ${ARCHIVO}`);
     }
@@ -890,6 +920,7 @@ client.once(Events.ClientReady, () => {
     console.log(`📋 Jornada activa: ${NOMBRE_JORNADA}`);
     console.log(`⚽ Partidos cargados: ${partidos.length + 1}`);
     console.log(`💾 Directorio de datos: ${DATA_DIR}`);
+
   } catch (error) {
     console.error('❌ No se pudo iniciar el bot:', error);
     process.exit(1);
