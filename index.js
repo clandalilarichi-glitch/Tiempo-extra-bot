@@ -20,23 +20,33 @@ const client = new Client({
 
 // ALMACENAMIENTO PERSISTENTE FADEHOST
 const DATA_DIR = path.join(__dirname, 'storage');
-
 const ARCHIVO = path.join(DATA_DIR, 'quinielas.json');
 const ARCHIVO_JORNADAS = path.join(DATA_DIR, 'jornadas.json');
-
 const CANAL_JORNADAS = '1552467310441402450';
 
 let configuracionJornadas;
-let JORNADA;
-let datosJornada;
-let NOMBRE_JORNADA;
-let partidos;
-let pleno;
+let JORNADA = null;
+let datosJornada = null;
+let NOMBRE_JORNADA = null;
+let partidos = [];
+let pleno = [];
 
 let quinielasGuardadas = {};
 const pronosticos = new Map();
 
-// CARGAR Y VALIDAR LA JORNADA ACTIVA
+// COMPROBAR SI HAY JORNADA ACTIVA
+function hayJornadaActiva() {
+  return Boolean(
+    JORNADA &&
+    datosJornada &&
+    Array.isArray(partidos) &&
+    partidos.length === 14 &&
+    Array.isArray(pleno) &&
+    pleno.length === 2
+  );
+}
+
+// CARGAR CONFIGURACIÓN DE JORNADAS
 function cargarConfiguracionJornadas() {
   if (!fs.existsSync(ARCHIVO_JORNADAS)) {
     throw new Error(`No existe el archivo: ${ARCHIVO_JORNADAS}`);
@@ -46,11 +56,27 @@ function cargarConfiguracionJornadas() {
     fs.readFileSync(ARCHIVO_JORNADAS, 'utf8')
   );
 
-  JORNADA = configuracionJornadas.jornadaActiva;
-  datosJornada = configuracionJornadas.jornadas?.[JORNADA];
+  if (!configuracionJornadas.jornadas) {
+    configuracionJornadas.jornadas = {};
+  }
 
+  JORNADA = configuracionJornadas.jornadaActiva || null;
+  datosJornada = JORNADA
+    ? configuracionJornadas.jornadas[JORNADA]
+    : null;
+
+  // PERMITIR QUE EL BOT FUNCIONE SIN JORNADA ACTIVA
   if (!datosJornada) {
-    throw new Error('No se ha encontrado la jornada activa.');
+    JORNADA = null;
+    datosJornada = null;
+    NOMBRE_JORNADA = null;
+    partidos = [];
+    pleno = [];
+
+    configuracionJornadas.jornadaActiva = null;
+
+    console.log('⚠️ No hay ninguna jornada activa.');
+    return;
   }
 
   NOMBRE_JORNADA = datosJornada.nombre;
@@ -93,36 +119,32 @@ function cargarQuinielas() {
     throw new Error(`No existe el archivo: ${ARCHIVO}`);
   }
 
-  try {
-    quinielasGuardadas = JSON.parse(
-      fs.readFileSync(ARCHIVO, 'utf8')
-    );
+  quinielasGuardadas = JSON.parse(
+    fs.readFileSync(ARCHIVO, 'utf8')
+  );
 
-    if (
-      !quinielasGuardadas ||
-      typeof quinielasGuardadas !== 'object' ||
-      Array.isArray(quinielasGuardadas)
-    ) {
-      throw new Error('El contenido de quinielas.json no es válido.');
-    }
-
-    if (!quinielasGuardadas._resultados) {
-      quinielasGuardadas._resultados = {};
-    }
-
-    if (!quinielasGuardadas._saldos) {
-      quinielasGuardadas._saldos = {};
-    }
-
-    if (!quinielasGuardadas[JORNADA]) {
-      quinielasGuardadas[JORNADA] = {};
-    }
-
-    console.log('💾 Datos cargados correctamente.');
-  } catch (error) {
-    console.error('Error leyendo datos:', error);
-    throw error;
+  if (
+    !quinielasGuardadas ||
+    typeof quinielasGuardadas !== 'object' ||
+    Array.isArray(quinielasGuardadas)
+  ) {
+    throw new Error('El contenido de quinielas.json no es válido.');
   }
+
+  if (!quinielasGuardadas._resultados) {
+    quinielasGuardadas._resultados = {};
+  }
+
+  if (!quinielasGuardadas._saldos) {
+    quinielasGuardadas._saldos = {};
+  }
+
+  // SOLO CREAR EL REGISTRO SI EXISTE UNA JORNADA ACTIVA
+  if (JORNADA && !quinielasGuardadas[JORNADA]) {
+    quinielasGuardadas[JORNADA] = {};
+  }
+
+  console.log('💾 Datos cargados correctamente.');
 }
 
 // GUARDAR QUINIELAS
@@ -146,7 +168,21 @@ function esAdministrador(interaction) {
   );
 }
 
-// CREAR IDENTIFICADOR DE JORNADA
+// COMPROBAR JORNADA ACTIVA
+async function exigirJornadaActiva(interaction) {
+  if (hayJornadaActiva()) return true;
+
+  await interaction.reply({
+    content:
+      '⚠️ No hay ninguna jornada activa.\n' +
+      'Un administrador debe crear y aprobar una nueva jornada con `/crearjornada`.',
+    ephemeral: true
+  });
+
+  return false;
+}
+
+// CREAR IDENTIFICADOR
 function crearIdJornada(nombre) {
   const base = nombre
     .normalize('NFD')
@@ -159,7 +195,7 @@ function crearIdJornada(nombre) {
   return `${base}-${Date.now().toString().slice(-8)}`;
 }
 
-// LEER PARTIDO ESCRITO COMO "LOCAL - VISITANTE"
+// SEPARAR PARTIDO
 function separarPartido(texto, numero) {
   const separador = texto.indexOf('-');
 
@@ -179,7 +215,7 @@ function separarPartido(texto, numero) {
   return [local, visitante];
 }
 
-// CREAR VISTA PREVIA DE UNA JORNADA
+// EMBED DE JORNADA
 function crearEmbedJornada(
   nombre,
   listaPartidos,
@@ -201,13 +237,11 @@ function crearEmbedJornada(
           : '❌ Jornada rechazada.'
     );
 
-  const lineas = listaPartidos.map((p, i) =>
-    `**${i + 1}.** ${p[0]} - ${p[1]}`
-  );
-
   embed.addFields({
     name: '📋 Partidos 1–14',
-    value: lineas.join('\n')
+    value: listaPartidos.map((p, i) =>
+      `**${i + 1}.** ${p[0]} - ${p[1]}`
+    ).join('\n')
   });
 
   embed.addFields({
@@ -237,7 +271,7 @@ function botonesJornada(id, desactivados = false) {
   );
 }
 
-// PROCESAR /CREARJORNADA
+// CREAR JORNADA
 async function crearJornadaDesdeComando(interaction) {
   if (!esAdministrador(interaction)) {
     await interaction.reply({
@@ -265,11 +299,9 @@ async function crearJornadaDesdeComando(interaction) {
     return;
   }
 
-  let listaPartidos;
+  let listaPartidos = [];
 
   try {
-    listaPartidos = [];
-
     for (let i = 1; i <= 14; i++) {
       const texto = interaction.options.getString(`partido${i}`, true);
       listaPartidos.push(separarPartido(texto, i));
@@ -300,7 +332,7 @@ async function crearJornadaDesdeComando(interaction) {
 
   if (!canal || !canal.isTextBased()) {
     await interaction.reply({
-      content: '❌ No encuentro el canal de anuncios de jornadas. Comprueba el ID y los permisos del bot.',
+      content: '❌ No encuentro el canal de anuncios de jornadas.',
       ephemeral: true
     });
     return;
@@ -320,7 +352,7 @@ async function crearJornadaDesdeComando(interaction) {
     console.error('No se pudo publicar la vista previa:', error);
 
     await interaction.reply({
-      content: '❌ No he podido publicar la jornada. Comprueba que el bot puede ver y enviar mensajes en el canal.',
+      content: '❌ No he podido publicar la jornada. Comprueba los permisos del bot.',
       ephemeral: true
     });
     return;
@@ -345,10 +377,10 @@ async function crearJornadaDesdeComando(interaction) {
   try {
     guardarConfiguracionJornadas();
   } catch (error) {
-    console.error('Error guardando la jornada pendiente:', error);
+    console.error('Error guardando jornada pendiente:', error);
 
     await mensaje.edit({
-      content: '⚠️ No se pudo guardar la propuesta. No la apruebes; contacta con el administrador del bot.',
+      content: '⚠️ No se pudo guardar la propuesta. No la apruebes.',
       components: []
     }).catch(() => {});
 
@@ -360,7 +392,7 @@ async function crearJornadaDesdeComando(interaction) {
   }
 
   await interaction.reply({
-    content: `✅ Vista previa publicada en <#${CANAL_JORNADAS}>. La jornada **${nombre}** todavía no está activa: necesita aprobación.`,
+    content: `✅ Vista previa publicada en <#${CANAL_JORNADAS}>. La jornada **${nombre}** necesita aprobación.`,
     ephemeral: true
   });
 }
@@ -387,13 +419,9 @@ async function gestionarJornada(interaction) {
   }
 
   if (accion === 'aprobar_jornada') {
-    if (!configuracionJornadas.jornadas) {
-      configuracionJornadas.jornadas = {};
-    }
-
     if (configuracionJornadas.jornadas[id]) {
       await interaction.reply({
-        content: '⚠️ Ya existe una jornada con ese identificador. No se ha modificado nada.',
+        content: '⚠️ Ya existe una jornada con ese identificador.',
         ephemeral: true
       });
       return;
@@ -419,10 +447,10 @@ async function gestionarJornada(interaction) {
 
       pronosticos.clear();
     } catch (error) {
-      console.error('Error activando la jornada:', error);
+      console.error('Error activando jornada:', error);
 
       await interaction.reply({
-        content: '❌ No se pudo activar la jornada. Revisa los archivos JSON antes de volver a intentarlo.',
+        content: '❌ No se pudo activar la jornada. Revisa los archivos JSON.',
         ephemeral: true
       });
       return;
@@ -431,12 +459,7 @@ async function gestionarJornada(interaction) {
     await interaction.update({
       content: '✅ **Jornada aprobada.**',
       embeds: [
-        crearEmbedJornada(
-          NOMBRE_JORNADA,
-          partidos,
-          pleno,
-          'aprobada'
-        )
+        crearEmbedJornada(NOMBRE_JORNADA, partidos, pleno, 'aprobada')
       ],
       components: [botonesJornada(id, true)]
     });
@@ -446,9 +469,7 @@ async function gestionarJornada(interaction) {
         `🏆 **¡Nueva jornada activa en Tiempo Extra!**\n` +
         `⚽ **${NOMBRE_JORNADA}**\n` +
         `Ya podéis utilizar \`/quiniela\` para enviar vuestros pronósticos.`
-    }).catch(error => {
-      console.error('No se pudo anunciar la activación:', error);
-    });
+    }).catch(console.error);
 
     console.log(`✅ Jornada activada: ${JORNADA}`);
     return;
@@ -460,7 +481,7 @@ async function gestionarJornada(interaction) {
     try {
       guardarConfiguracionJornadas();
     } catch (error) {
-      console.error('Error rechazando la jornada:', error);
+      console.error('Error rechazando jornada:', error);
 
       await interaction.reply({
         content: '❌ No se pudo guardar el rechazo.',
@@ -481,8 +502,6 @@ async function gestionarJornada(interaction) {
       ],
       components: [botonesJornada(id, true)]
     });
-
-    console.log(`❌ Jornada rechazada: ${id}`);
   }
 }
 
@@ -572,23 +591,13 @@ function crearPantalla(userId, pagina) {
 
     filas.push(
       new ActionRowBuilder().addComponents(
-        crearMenu(
-          'pleno_local',
-          `Goles de ${pleno[0]}`,
-          goles,
-          estado.plenoLocal
-        )
+        crearMenu('pleno_local', `Goles de ${pleno[0]}`, goles, estado.plenoLocal)
       )
     );
 
     filas.push(
       new ActionRowBuilder().addComponents(
-        crearMenu(
-          'pleno_visitante',
-          `Goles de ${pleno[1]}`,
-          goles,
-          estado.plenoVisitante
-        )
+        crearMenu('pleno_visitante', `Goles de ${pleno[1]}`, goles, estado.plenoVisitante)
       )
     );
   }
@@ -672,7 +681,7 @@ async function mostrarPronosticos(interaction) {
   });
 }
 
-// CALCULAR RESULTADOS Y MONEDAS POR ACIERTOS
+// CALCULAR RESULTADOS
 function calcularJornada(resultados) {
   if (
     !resultados ||
@@ -703,11 +712,8 @@ function calcularJornada(resultados) {
       }
     }
 
-    const aciertoLocal =
-      apuesta.plenoLocal === resultados.plenoLocal;
-
-    const aciertoVisitante =
-      apuesta.plenoVisitante === resultados.plenoVisitante;
+    const aciertoLocal = apuesta.plenoLocal === resultados.plenoLocal;
+    const aciertoVisitante = apuesta.plenoVisitante === resultados.plenoVisitante;
 
     if (aciertoLocal) {
       puntos += 2;
@@ -762,35 +768,27 @@ function calcularJornada(resultados) {
   return clasificacion;
 }
 
-// REPARTIR PREMIOS DEL PODIO
+// REPARTIR PREMIOS
 function repartirPremiosJornada() {
   const resultados =
     quinielasGuardadas._resultados[JORNADA];
 
   if (!resultados) {
-    return {
-      error: 'Primero debes introducir los resultados con /resultados.'
-    };
+    return { error: 'Primero debes introducir los resultados con /resultados.' };
   }
 
   if (resultados.jornadaFinalizada !== true) {
-    return {
-      error: 'La jornada no está confirmada como finalizada. No se pueden repartir premios.'
-    };
+    return { error: 'La jornada no está confirmada como finalizada.' };
   }
 
   if (resultados.premiosRepartidos) {
-    return {
-      error: 'Los premios de esta jornada ya se han repartido.'
-    };
+    return { error: 'Los premios de esta jornada ya se han repartido.' };
   }
 
   const clasificacion = resultados.clasificacion;
 
   if (!clasificacion || clasificacion.length === 0) {
-    return {
-      error: 'No hay participantes para repartir los premios.'
-    };
+    return { error: 'No hay participantes para repartir los premios.' };
   }
 
   const premios = [1000, 600, 300];
@@ -801,9 +799,7 @@ function repartirPremiosJornada() {
 
     jugador.premio = premio;
 
-    const apuesta =
-      quinielasGuardadas[JORNADA][jugador.userId];
-
+    const apuesta = quinielasGuardadas[JORNADA][jugador.userId];
     apuesta.premioJornada = premio;
 
     const saldoActual =
@@ -818,13 +814,10 @@ function repartirPremiosJornada() {
 
   guardarQuinielas();
 
-  return {
-    clasificacion,
-    error: null
-  };
+  return { clasificacion, error: null };
 }
 
-// MOSTRAR CLASIFICACIÓN
+// CLASIFICACIÓN
 async function mostrarClasificacion(interaction) {
   const resultados =
     quinielasGuardadas._resultados[JORNADA];
@@ -925,7 +918,7 @@ async function mostrarJornadas(interaction) {
   });
 }
 
-// MOSTRAR MENÚ PARA ELIMINAR JORNADA
+// MENÚ PARA ELIMINAR JORNADA
 async function mostrarEliminarJornada(interaction) {
   if (!esAdministrador(interaction)) {
     await interaction.reply({
@@ -939,9 +932,9 @@ async function mostrarEliminarJornada(interaction) {
     configuracionJornadas.jornadas || {}
   );
 
-  if (jornadas.length <= 1) {
+  if (jornadas.length === 0) {
     await interaction.reply({
-      content: '⚠️ Necesitas tener al menos dos jornadas registradas para eliminar una.',
+      content: '📭 No hay jornadas registradas para eliminar.',
       ephemeral: true
     });
     return;
@@ -959,7 +952,9 @@ async function mostrarEliminarJornada(interaction) {
     );
 
   await interaction.reply({
-    content: '🗑️ **ELIMINAR JORNADA**\nSelecciona la jornada que deseas borrar.',
+    content:
+      '🗑️ **ELIMINAR JORNADA**\n' +
+      'Selecciona la jornada que deseas borrar.',
     components: [
       new ActionRowBuilder().addComponents(menu)
     ],
@@ -967,7 +962,7 @@ async function mostrarEliminarJornada(interaction) {
   });
 }
 
-// ELIMINAR JORNADA SELECCIONADA
+// ELIMINAR JORNADA
 async function confirmarEliminarJornada(interaction, id) {
   if (!esAdministrador(interaction)) {
     await interaction.reply({
@@ -987,78 +982,103 @@ async function confirmarEliminarJornada(interaction, id) {
     return;
   }
 
-  if (Object.keys(configuracionJornadas.jornadas).length <= 1) {
-    await interaction.update({
-      content: '⚠️ No puedes eliminar la última jornada registrada.',
-      components: []
-    });
-    return;
-  }
-
   const esActiva = configuracionJornadas.jornadaActiva === id;
 
-  // PREPARAR UNA NUEVA JORNADA ACTIVA SI ES NECESARIO
-  let nuevaActiva = null;
+  // BUSCAR OTRA JORNADA PARA ACTIVAR
+  const restantes = Object.entries(
+    configuracionJornadas.jornadas
+  ).filter(([otroId]) => otroId !== id);
 
-  if (esActiva) {
-    const restantes = Object.entries(
-      configuracionJornadas.jornadas
-    ).filter(([otroId]) => otroId !== id);
+  restantes.sort((a, b) =>
+    new Date(b[1].fechaActivacion || 0) -
+    new Date(a[1].fechaActivacion || 0)
+  );
 
-    restantes.sort((a, b) =>
-      new Date(b[1].fechaActivacion || 0) -
-      new Date(a[1].fechaActivacion || 0)
-    );
+  const nuevaActiva = restantes.length > 0
+    ? restantes[0][0]
+    : null;
 
-    nuevaActiva = restantes[0][0];
-  }
+  // PREPARAR COPIAS PARA EVITAR CAMBIOS PARCIALES
+  const copiaJornadas = JSON.parse(
+    JSON.stringify(configuracionJornadas)
+  );
 
-  // DESCONTAR LAS MONEDAS Y PREMIOS GANADOS EN ESA JORNADA
-  const participantes = quinielasGuardadas[id] || {};
+  const copiaQuinielas = JSON.parse(
+    JSON.stringify(quinielasGuardadas)
+  );
+
+  // DESCONTAR MONEDAS Y PREMIOS DE ESA JORNADA
+  const participantes = copiaQuinielas[id] || {};
 
   for (const [userId, apuesta] of Object.entries(participantes)) {
     const monedasGanadas = Number(apuesta.monedas || 0);
     const premio = Number(apuesta.premioJornada || 0);
     const descuento = monedasGanadas + premio;
 
-    const saldo = Number(quinielasGuardadas._saldos[userId] || 0);
+    const saldo = Number(copiaQuinielas._saldos[userId] || 0);
 
-    quinielasGuardadas._saldos[userId] =
+    copiaQuinielas._saldos[userId] =
       Math.max(0, saldo - descuento);
   }
 
-  // ELIMINAR PRONÓSTICOS Y RESULTADOS
-  delete quinielasGuardadas[id];
+  // BORRAR PRONÓSTICOS Y RESULTADOS
+  delete copiaQuinielas[id];
 
-  if (quinielasGuardadas._resultados) {
-    delete quinielasGuardadas._resultados[id];
+  if (copiaQuinielas._resultados) {
+    delete copiaQuinielas._resultados[id];
   }
 
-  // ELIMINAR LA JORNADA
-  delete configuracionJornadas.jornadas[id];
+  // BORRAR JORNADA
+  delete copiaJornadas.jornadas[id];
 
-  // CAMBIAR LA JORNADA ACTIVA SI SE HA ELIMINADO
-  if (esActiva && nuevaActiva) {
-    configuracionJornadas.jornadaActiva = nuevaActiva;
+  // CAMBIAR JORNADA ACTIVA O DEJARLA VACÍA
+  if (esActiva) {
+    copiaJornadas.jornadaActiva = nuevaActiva;
   }
 
   try {
-    guardarConfiguracionJornadas();
-    guardarQuinielas();
+    // GUARDAR LAS COPIAS ANTES DE ACTUALIZAR LA MEMORIA
+    const temporalJornadas = ARCHIVO_JORNADAS + '.tmp';
+    const temporalQuinielas = ARCHIVO + '.tmp';
+
+    fs.writeFileSync(
+      temporalJornadas,
+      JSON.stringify(copiaJornadas, null, 2)
+    );
+
+    fs.writeFileSync(
+      temporalQuinielas,
+      JSON.stringify(copiaQuinielas, null, 2)
+    );
+
+    fs.renameSync(temporalJornadas, ARCHIVO_JORNADAS);
+    fs.renameSync(temporalQuinielas, ARCHIVO);
+
+    // ACTUALIZAR DATOS EN MEMORIA
+    configuracionJornadas = copiaJornadas;
+    quinielasGuardadas = copiaQuinielas;
 
     cargarConfiguracionJornadas();
     pronosticos.clear();
+
+    let mensajeActiva;
+
+    if (esActiva && nuevaActiva) {
+      mensajeActiva =
+        `🟢 Nueva jornada activa: **${NOMBRE_JORNADA}**`;
+    } else if (esActiva) {
+      mensajeActiva =
+        '⚠️ No queda ninguna jornada activa. Crea una nueva con `/crearjornada`.';
+    } else {
+      mensajeActiva = '✅ La jornada activa no ha cambiado.';
+    }
 
     await interaction.update({
       content:
         `🗑️ **Jornada eliminada correctamente.**\n\n` +
         `⚽ Jornada eliminada: **${jornada.nombre || id}**\n` +
-        (
-          esActiva
-            ? `🟢 Nueva jornada activa: **${NOMBRE_JORNADA}**`
-            : '✅ La jornada activa no ha cambiado.'
-        ) +
-        `\n💰 Se han ajustado las monedas ganadas en esa jornada.`,
+        `${mensajeActiva}\n` +
+        `💰 Se han ajustado las monedas ganadas en esa jornada.`,
       embeds: [],
       components: []
     });
@@ -1068,7 +1088,9 @@ async function confirmarEliminarJornada(interaction, id) {
     console.error('Error eliminando jornada:', error);
 
     await interaction.update({
-      content: '❌ Ha ocurrido un error al guardar los cambios. Revisa los archivos JSON antes de volver a intentarlo.',
+      content:
+        '❌ Ha ocurrido un error al guardar los cambios. ' +
+        'Comprueba los archivos JSON antes de volver a intentarlo.',
       embeds: [],
       components: []
     }).catch(() => {});
@@ -1087,49 +1109,31 @@ client.once(Events.ClientReady, () => {
 
     console.log(
       '📂 Contenido de /data:',
-      fs.existsSync('/data')
-        ? fs.readdirSync('/data')
-        : 'NO EXISTE'
+      fs.existsSync('/data') ? fs.readdirSync('/data') : 'NO EXISTE'
     );
 
     console.log(
       '📂 Contenido de /data/storage:',
-      fs.existsSync('/data/storage')
-        ? fs.readdirSync('/data/storage')
-        : 'NO EXISTE'
+      fs.existsSync('/data/storage') ? fs.readdirSync('/data/storage') : 'NO EXISTE'
     );
 
     console.log(
       '📂 Contenido de /data/app:',
-      fs.existsSync('/data/app')
-        ? fs.readdirSync('/data/app')
-        : 'NO EXISTE'
+      fs.existsSync('/data/app') ? fs.readdirSync('/data/app') : 'NO EXISTE'
     );
 
     console.log(
       '📂 Contenido de /data/app/storage:',
-      fs.existsSync('/data/app/storage')
-        ? fs.readdirSync('/data/app/storage')
-        : 'NO EXISTE'
+      fs.existsSync('/data/app/storage') ? fs.readdirSync('/data/app/storage') : 'NO EXISTE'
     );
 
     console.log(
       '📂 Contenido de la carpeta del proyecto:',
-      fs.existsSync(__dirname)
-        ? fs.readdirSync(__dirname)
-        : 'NO EXISTE'
+      fs.existsSync(__dirname) ? fs.readdirSync(__dirname) : 'NO EXISTE'
     );
 
-    console.log(
-      '🔎 Existe quinielas.json:',
-      fs.existsSync(ARCHIVO)
-    );
-
-    console.log(
-      '🔎 Existe jornadas.json:',
-      fs.existsSync(ARCHIVO_JORNADAS)
-    );
-
+    console.log('🔎 Existe quinielas.json:', fs.existsSync(ARCHIVO));
+    console.log('🔎 Existe jornadas.json:', fs.existsSync(ARCHIVO_JORNADAS));
     console.log('========================================');
 
     if (!fs.existsSync(ARCHIVO)) {
@@ -1144,10 +1148,15 @@ client.once(Events.ClientReady, () => {
     cargarQuinielas();
 
     console.log(`⚽ Conectado como ${client.user.tag}`);
-    console.log(`📋 Jornada activa: ${NOMBRE_JORNADA}`);
-    console.log(`⚽ Partidos cargados: ${partidos.length + 1}`);
-    console.log(`💾 Directorio de datos: ${DATA_DIR}`);
 
+    if (hayJornadaActiva()) {
+      console.log(`📋 Jornada activa: ${NOMBRE_JORNADA}`);
+      console.log(`⚽ Partidos cargados: ${partidos.length + 1}`);
+    } else {
+      console.log('⚠️ El bot está conectado sin jornada activa.');
+    }
+
+    console.log(`💾 Directorio de datos: ${DATA_DIR}`);
   } catch (error) {
     console.error('❌ No se pudo iniciar el bot:', error);
     process.exit(1);
@@ -1159,8 +1168,9 @@ client.on(Events.InteractionCreate, async interaction => {
   try {
     // COMANDOS
     if (interaction.isChatInputCommand()) {
-
       if (interaction.commandName === 'quiniela') {
+        if (!await exigirJornadaActiva(interaction)) return;
+
         if (quinielasGuardadas._resultados[JORNADA]) {
           await interaction.reply({
             content: '🔒 Esta jornada ya está cerrada. No se aceptan más pronósticos.',
@@ -1169,8 +1179,7 @@ client.on(Events.InteractionCreate, async interaction => {
           return;
         }
 
-        const guardada =
-          quinielasGuardadas[JORNADA]?.[interaction.user.id];
+        const guardada = quinielasGuardadas[JORNADA]?.[interaction.user.id];
 
         if (guardada) {
           await interaction.reply({
@@ -1183,19 +1192,18 @@ client.on(Events.InteractionCreate, async interaction => {
         }
 
         obtenerEstado(interaction.user.id);
-
-        await interaction.reply(
-          crearPantalla(interaction.user.id, 0)
-        );
+        await interaction.reply(crearPantalla(interaction.user.id, 0));
         return;
       }
 
       if (interaction.commandName === 'mispronosticos') {
+        if (!await exigirJornadaActiva(interaction)) return;
         await mostrarPronosticos(interaction);
         return;
       }
 
       if (interaction.commandName === 'clasificacion') {
+        if (!await exigirJornadaActiva(interaction)) return;
         await mostrarClasificacion(interaction);
         return;
       }
@@ -1215,7 +1223,7 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      // INTRODUCIR RESULTADOS
+      // RESULTADOS
       if (interaction.commandName === 'resultados') {
         if (!esAdministrador(interaction)) {
           await interaction.reply({
@@ -1224,6 +1232,8 @@ client.on(Events.InteractionCreate, async interaction => {
           });
           return;
         }
+
+        if (!await exigirJornadaActiva(interaction)) return;
 
         const jornadaFinalizada =
           interaction.options.getBoolean('jornada_finalizada', true);
@@ -1238,9 +1248,7 @@ client.on(Events.InteractionCreate, async interaction => {
 
         if (quinielasGuardadas._resultados[JORNADA]) {
           await interaction.reply({
-            content:
-              '⚠️ Los resultados de esta jornada ya se han calculado. ' +
-              'No se volverán a repartir monedas.',
+            content: '⚠️ Los resultados de esta jornada ya se han calculado.',
             ephemeral: true
           });
           return;
@@ -1275,7 +1283,7 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      // REPARTIR PREMIOS DEL PODIO
+      // REPARTIR PREMIOS
       if (interaction.commandName === 'repartirpremios') {
         if (!esAdministrador(interaction)) {
           await interaction.reply({
@@ -1284,6 +1292,8 @@ client.on(Events.InteractionCreate, async interaction => {
           });
           return;
         }
+
+        if (!await exigirJornadaActiva(interaction)) return;
 
         const resultado = repartirPremiosJornada();
 
@@ -1322,7 +1332,7 @@ client.on(Events.InteractionCreate, async interaction => {
       }
     }
 
-    // BOTONES DE APROBACIÓN / RECHAZO
+    // APROBAR / RECHAZAR JORNADA
     if (
       interaction.isButton() &&
       (
@@ -1334,7 +1344,7 @@ client.on(Events.InteractionCreate, async interaction => {
       return;
     }
 
-    // SELECTOR DE JORNADA PARA ELIMINAR
+    // SELECTOR PARA ELIMINAR JORNADA
     if (
       interaction.isStringSelectMenu() &&
       interaction.customId === 'seleccionar_eliminar_jornada'
@@ -1374,7 +1384,7 @@ client.on(Events.InteractionCreate, async interaction => {
         content:
           `⚠️ **¿Estás seguro de eliminar esta jornada?**\n\n` +
           `⚽ Jornada: **${jornada.nombre || id}**\n` +
-          `Se borrarán sus pronósticos, resultados y recompensas asociadas.`,
+          'Se borrarán sus pronósticos, resultados y recompensas asociadas.',
         components: [botones]
       });
 
@@ -1406,13 +1416,20 @@ client.on(Events.InteractionCreate, async interaction => {
       }
 
       const id = interaction.customId.split(':')[1];
-
       await confirmarEliminarJornada(interaction, id);
       return;
     }
 
-    // MENÚS DE SELECCIÓN DE QUINIELA
+    // MENÚS DE QUINIELA
     if (interaction.isStringSelectMenu()) {
+      if (!hayJornadaActiva()) {
+        await interaction.reply({
+          content: '⚠️ No hay ninguna jornada activa. Espera a que se apruebe una nueva.',
+          ephemeral: true
+        });
+        return;
+      }
+
       if (quinielasGuardadas._resultados[JORNADA]) {
         await interaction.reply({
           content: '🔒 Esta jornada ya está cerrada.',
@@ -1425,10 +1442,7 @@ client.on(Events.InteractionCreate, async interaction => {
       const valor = interaction.values[0];
 
       if (interaction.customId.startsWith('partido_')) {
-        const numero = Number(
-          interaction.customId.split('_')[1]
-        );
-
+        const numero = Number(interaction.customId.split('_')[1]);
         estado.partidos[numero] = valor;
       }
 
@@ -1446,8 +1460,16 @@ client.on(Events.InteractionCreate, async interaction => {
       return;
     }
 
-    // BOTONES DE LA QUINIELA
+    // BOTONES DE QUINIELA
     if (interaction.isButton()) {
+      if (!hayJornadaActiva()) {
+        await interaction.reply({
+          content: '⚠️ No hay ninguna jornada activa.',
+          ephemeral: true
+        });
+        return;
+      }
+
       if (quinielasGuardadas._resultados[JORNADA]) {
         await interaction.reply({
           content: '🔒 Esta jornada ya está cerrada.',
@@ -1531,10 +1553,7 @@ client.on(Events.InteractionCreate, async interaction => {
           components: []
         });
 
-        console.log(
-          `💾 Quiniela guardada: ${interaction.user.username}`
-        );
-
+        console.log(`💾 Quiniela guardada: ${interaction.user.username}`);
         return;
       }
     }
