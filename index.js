@@ -1,4 +1,3 @@
-
 const fs = require('fs');
 const path = require('path');
 
@@ -18,8 +17,12 @@ const client = new Client({
   intents: [GatewayIntentBits.Guilds]
 });
 
-const ARCHIVO = path.join(__dirname, 'quinielas.json');
-const ARCHIVO_JORNADAS = path.join(__dirname, 'jornadas.json');
+// ALMACENAMIENTO PERSISTENTE FADEHOST
+const DATA_DIR = process.env.DATA_DIR || __dirname;
+
+const ARCHIVO = path.join(DATA_DIR, 'quinielas.json');
+const ARCHIVO_JORNADAS = path.join(DATA_DIR, 'jornadas.json');
+
 const CANAL_JORNADAS = '1552467310441402450';
 
 let configuracionJornadas;
@@ -405,7 +408,6 @@ async function gestionarJornada(interaction) {
         guardarQuinielas();
       }
 
-      // Evitar reutilizar pronósticos de la jornada anterior
       pronosticos.clear();
     } catch (error) {
       console.error('Error activando la jornada:', error);
@@ -430,9 +432,7 @@ async function gestionarJornada(interaction) {
       components: [botonesJornada(id, true)]
     });
 
-    const canal = interaction.channel;
-
-    await canal.send({
+    await interaction.channel.send({
       content:
         `🏆 **¡Nueva jornada activa en Tiempo Extra!**\n` +
         `⚽ **${NOMBRE_JORNADA}**\n` +
@@ -665,7 +665,6 @@ async function mostrarPronosticos(interaction) {
 
 // CALCULAR RESULTADOS Y MONEDAS POR ACIERTOS
 function calcularJornada(resultados) {
-  // COMPROBAR QUE TODOS LOS RESULTADOS SON VÁLIDOS
   if (
     !resultados ||
     !resultados.partidos ||
@@ -723,7 +722,6 @@ function calcularJornada(resultados) {
     const saldoActual =
       quinielasGuardadas._saldos[userId] || 0;
 
-    // Añadir solamente las monedas por aciertos
     quinielasGuardadas._saldos[userId] =
       saldoActual + monedas;
 
@@ -766,7 +764,6 @@ function repartirPremiosJornada() {
     };
   }
 
-  // COMPROBAR QUE LA JORNADA ESTÁ FINALIZADA
   if (resultados.jornadaFinalizada !== true) {
     return {
       error: 'La jornada no está confirmada como finalizada. No se pueden repartir premios.'
@@ -863,12 +860,18 @@ async function mostrarClasificacion(interaction) {
 // BOT CONECTADO
 client.once(Events.ClientReady, () => {
   try {
+    // Comprobar que existe el almacenamiento
+    if (!fs.existsSync(DATA_DIR)) {
+      throw new Error(`No existe el directorio de datos: ${DATA_DIR}`);
+    }
+
     cargarConfiguracionJornadas();
     cargarQuinielas();
 
     console.log(`⚽ Conectado como ${client.user.tag}`);
     console.log(`📋 Jornada activa: ${NOMBRE_JORNADA}`);
     console.log(`⚽ Partidos cargados: ${partidos.length + 1}`);
+    console.log(`💾 Directorio de datos: ${DATA_DIR}`);
   } catch (error) {
     console.error('❌ No se pudo iniciar el bot:', error);
     process.exit(1);
@@ -936,7 +939,6 @@ client.on(Events.InteractionCreate, async interaction => {
           return;
         }
 
-        // CONFIRMAR QUE TODOS LOS PARTIDOS HAN TERMINADO
         const jornadaFinalizada =
           interaction.options.getBoolean('jornada_finalizada', true);
 
