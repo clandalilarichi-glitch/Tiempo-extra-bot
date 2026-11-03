@@ -1,4 +1,3 @@
-
 const fs = require('fs');
 const path = require('path');
 
@@ -65,7 +64,6 @@ function cargarConfiguracionJornadas() {
     ? configuracionJornadas.jornadas[JORNADA]
     : null;
 
-  // PERMITIR QUE EL BOT FUNCIONE SIN JORNADA ACTIVA
   if (!datosJornada) {
     JORNADA = null;
     datosJornada = null;
@@ -139,7 +137,6 @@ function cargarQuinielas() {
     quinielasGuardadas._saldos = {};
   }
 
-  // SOLO CREAR EL REGISTRO SI EXISTE UNA JORNADA ACTIVA
   if (JORNADA && !quinielasGuardadas[JORNADA]) {
     quinielasGuardadas[JORNADA] = {};
   }
@@ -271,130 +268,130 @@ function botonesJornada(id, desactivados = false) {
   );
 }
 
-// CREAR JORNADA
+// CREAR JORNADA — CORREGIDO
 async function crearJornadaDesdeComando(interaction) {
-  if (!esAdministrador(interaction)) {
-    await interaction.reply({
-      content: '⛔ Solo los administradores pueden proponer jornadas.',
-      ephemeral: true
-    });
-    return;
-  }
-
-  if (configuracionJornadas.jornadaPendiente) {
-    await interaction.reply({
-      content: '⚠️ Ya hay una jornada pendiente de aprobación. Resuélvela antes de crear otra.',
-      ephemeral: true
-    });
-    return;
-  }
-
-  const nombre = interaction.options.getString('nombre', true).trim();
-
-  if (!nombre) {
-    await interaction.reply({
-      content: '⚠️ Debes indicar el nombre de la jornada.',
-      ephemeral: true
-    });
-    return;
-  }
-
-  let listaPartidos = [];
+  // Responder inmediatamente para evitar que caduque la interacción.
+  await interaction.deferReply({ ephemeral: true });
 
   try {
+    if (!esAdministrador(interaction)) {
+      await interaction.editReply(
+        '⛔ Solo los administradores pueden proponer jornadas.'
+      );
+      return;
+    }
+
+    if (configuracionJornadas.jornadaPendiente) {
+      await interaction.editReply(
+        '⚠️ Ya hay una jornada pendiente de aprobación. Resuélvela antes de crear otra.'
+      );
+      return;
+    }
+
+    const nombre = interaction.options.getString('nombre', true).trim();
+
+    if (!nombre) {
+      await interaction.editReply(
+        '⚠️ Debes indicar el nombre de la jornada.'
+      );
+      return;
+    }
+
+    const listaPartidos = [];
+
     for (let i = 1; i <= 14; i++) {
       const texto = interaction.options.getString(`partido${i}`, true);
       listaPartidos.push(separarPartido(texto, i));
     }
-  } catch (error) {
-    await interaction.reply({
-      content: `⚠️ ${error.message}`,
-      ephemeral: true
-    });
-    return;
-  }
 
-  const equipoPleno = [
-    interaction.options.getString('pleno_local', true).trim(),
-    interaction.options.getString('pleno_visitante', true).trim()
-  ];
+    const equipoPleno = [
+      interaction.options.getString('pleno_local', true).trim(),
+      interaction.options.getString('pleno_visitante', true).trim()
+    ];
 
-  if (!equipoPleno[0] || !equipoPleno[1]) {
-    await interaction.reply({
-      content: '⚠️ Debes indicar los dos equipos del Pleno al 15.',
-      ephemeral: true
-    });
-    return;
-  }
+    if (!equipoPleno[0] || !equipoPleno[1]) {
+      await interaction.editReply(
+        '⚠️ Debes indicar los dos equipos del Pleno al 15.'
+      );
+      return;
+    }
 
-  const id = crearIdJornada(nombre);
-  const canal = await client.channels.fetch(CANAL_JORNADAS).catch(() => null);
+    const id = crearIdJornada(nombre);
 
-  if (!canal || !canal.isTextBased()) {
-    await interaction.reply({
-      content: '❌ No encuentro el canal de anuncios de jornadas.',
-      ephemeral: true
-    });
-    return;
-  }
+    console.log('📋 Preparando jornada:', nombre);
+    console.log('🔎 Buscando canal:', CANAL_JORNADAS);
 
-  const embed = crearEmbedJornada(nombre, listaPartidos, equipoPleno);
+    const canal = await client.channels.fetch(CANAL_JORNADAS);
 
-  let mensaje;
+    if (!canal || !canal.isTextBased() || !canal.isSendable()) {
+      await interaction.editReply(
+        '❌ No encuentro el canal de anuncios de jornadas o no puedo publicar en él.'
+      );
+      return;
+    }
 
-  try {
-    mensaje = await canal.send({
+    const embed = crearEmbedJornada(
+      nombre,
+      listaPartidos,
+      equipoPleno
+    );
+
+    const mensaje = await canal.send({
       content: '📢 **Nueva jornada pendiente de aprobación**',
       embeds: [embed],
       components: [botonesJornada(id)]
     });
+
+    configuracionJornadas.jornadaPendiente = {
+      id,
+      datos: {
+        nombre,
+        estado: 'pendiente',
+        fecha: null,
+        fuente: 'manual',
+        partidos: listaPartidos,
+        pleno: equipoPleno
+      },
+      creadaPor: interaction.user.id,
+      creadaEn: new Date().toISOString(),
+      mensajeId: mensaje.id,
+      canalId: canal.id
+    };
+
+    try {
+      guardarConfiguracionJornadas();
+    } catch (error) {
+      console.error('❌ Error guardando jornada pendiente:', error);
+
+      configuracionJornadas.jornadaPendiente = null;
+
+      await mensaje.edit({
+        content: '⚠️ No se pudo guardar la propuesta. No la apruebes.',
+        components: []
+      }).catch(() => {});
+
+      throw new Error(
+        `No se pudo guardar jornadas.json: ${error.message}`
+      );
+    }
+
+    await interaction.editReply(
+      `✅ Vista previa publicada en <#${CANAL_JORNADAS}>. La jornada **${nombre}** necesita aprobación.`
+    );
+
+    console.log(`✅ Jornada propuesta correctamente: ${nombre}`);
   } catch (error) {
-    console.error('No se pudo publicar la vista previa:', error);
+    console.error('========== ERROR EN /CREARJORNADA ==========');
+    console.error(error);
+    console.error(error.stack);
+    console.error('============================================');
 
-    await interaction.reply({
-      content: '❌ No he podido publicar la jornada. Comprueba los permisos del bot.',
-      ephemeral: true
-    });
-    return;
-  }
-
-  configuracionJornadas.jornadaPendiente = {
-    id,
-    datos: {
-      nombre,
-      estado: 'pendiente',
-      fecha: null,
-      fuente: 'manual',
-      partidos: listaPartidos,
-      pleno: equipoPleno
-    },
-    creadaPor: interaction.user.id,
-    creadaEn: new Date().toISOString(),
-    mensajeId: mensaje.id,
-    canalId: canal.id
-  };
-
-  try {
-    guardarConfiguracionJornadas();
-  } catch (error) {
-    console.error('Error guardando jornada pendiente:', error);
-
-    await mensaje.edit({
-      content: '⚠️ No se pudo guardar la propuesta. No la apruebes.',
-      components: []
+    await interaction.editReply({
+      content:
+        `❌ No se pudo crear la jornada.\n` +
+        `**Error:** \`${String(error.message || error).slice(0, 1500)}\``
     }).catch(() => {});
-
-    await interaction.reply({
-      content: '❌ Error al guardar la propuesta en jornadas.json.',
-      ephemeral: true
-    });
-    return;
   }
-
-  await interaction.reply({
-    content: `✅ Vista previa publicada en <#${CANAL_JORNADAS}>. La jornada **${nombre}** necesita aprobación.`,
-    ephemeral: true
-  });
 }
 
 // APROBAR O RECHAZAR JORNADA
@@ -427,17 +424,31 @@ async function gestionarJornada(interaction) {
       return;
     }
 
-    configuracionJornadas.jornadas[id] = {
+    const copiaConfiguracion = JSON.parse(
+      JSON.stringify(configuracionJornadas)
+    );
+
+    copiaConfiguracion.jornadas[id] = {
       ...pendiente.datos,
       estado: 'activa',
       fechaActivacion: new Date().toISOString()
     };
 
-    configuracionJornadas.jornadaActiva = id;
-    configuracionJornadas.jornadaPendiente = null;
+    copiaConfiguracion.jornadaActiva = id;
+    copiaConfiguracion.jornadaPendiente = null;
 
     try {
-      guardarConfiguracionJornadas();
+      const temporal = ARCHIVO_JORNADAS + '.tmp';
+
+      fs.writeFileSync(
+        temporal,
+        JSON.stringify(copiaConfiguracion, null, 2)
+      );
+
+      fs.renameSync(temporal, ARCHIVO_JORNADAS);
+
+      configuracionJornadas = copiaConfiguracion;
+
       cargarConfiguracionJornadas();
 
       if (!quinielasGuardadas[JORNADA]) {
@@ -450,7 +461,7 @@ async function gestionarJornada(interaction) {
       console.error('Error activando jornada:', error);
 
       await interaction.reply({
-        content: '❌ No se pudo activar la jornada. Revisa los archivos JSON.',
+        content: `❌ No se pudo activar la jornada: ${error.message}`,
         ephemeral: true
       });
       return;
@@ -476,10 +487,23 @@ async function gestionarJornada(interaction) {
   }
 
   if (accion === 'rechazar_jornada') {
-    configuracionJornadas.jornadaPendiente = null;
+    const copiaConfiguracion = JSON.parse(
+      JSON.stringify(configuracionJornadas)
+    );
+
+    copiaConfiguracion.jornadaPendiente = null;
 
     try {
-      guardarConfiguracionJornadas();
+      const temporal = ARCHIVO_JORNADAS + '.tmp';
+
+      fs.writeFileSync(
+        temporal,
+        JSON.stringify(copiaConfiguracion, null, 2)
+      );
+
+      fs.renameSync(temporal, ARCHIVO_JORNADAS);
+
+      configuracionJornadas = copiaConfiguracion;
     } catch (error) {
       console.error('Error rechazando jornada:', error);
 
@@ -984,7 +1008,6 @@ async function confirmarEliminarJornada(interaction, id) {
 
   const esActiva = configuracionJornadas.jornadaActiva === id;
 
-  // BUSCAR OTRA JORNADA PARA ACTIVAR
   const restantes = Object.entries(
     configuracionJornadas.jornadas
   ).filter(([otroId]) => otroId !== id);
@@ -998,7 +1021,6 @@ async function confirmarEliminarJornada(interaction, id) {
     ? restantes[0][0]
     : null;
 
-  // PREPARAR COPIAS PARA EVITAR CAMBIOS PARCIALES
   const copiaJornadas = JSON.parse(
     JSON.stringify(configuracionJornadas)
   );
@@ -1007,7 +1029,6 @@ async function confirmarEliminarJornada(interaction, id) {
     JSON.stringify(quinielasGuardadas)
   );
 
-  // DESCONTAR MONEDAS Y PREMIOS DE ESA JORNADA
   const participantes = copiaQuinielas[id] || {};
 
   for (const [userId, apuesta] of Object.entries(participantes)) {
@@ -1021,23 +1042,19 @@ async function confirmarEliminarJornada(interaction, id) {
       Math.max(0, saldo - descuento);
   }
 
-  // BORRAR PRONÓSTICOS Y RESULTADOS
   delete copiaQuinielas[id];
 
   if (copiaQuinielas._resultados) {
     delete copiaQuinielas._resultados[id];
   }
 
-  // BORRAR JORNADA
   delete copiaJornadas.jornadas[id];
 
-  // CAMBIAR JORNADA ACTIVA O DEJARLA VACÍA
   if (esActiva) {
     copiaJornadas.jornadaActiva = nuevaActiva;
   }
 
   try {
-    // GUARDAR LAS COPIAS ANTES DE ACTUALIZAR LA MEMORIA
     const temporalJornadas = ARCHIVO_JORNADAS + '.tmp';
     const temporalQuinielas = ARCHIVO + '.tmp';
 
@@ -1054,7 +1071,6 @@ async function confirmarEliminarJornada(interaction, id) {
     fs.renameSync(temporalJornadas, ARCHIVO_JORNADAS);
     fs.renameSync(temporalQuinielas, ARCHIVO);
 
-    // ACTUALIZAR DATOS EN MEMORIA
     configuracionJornadas = copiaJornadas;
     quinielasGuardadas = copiaQuinielas;
 
@@ -1108,26 +1124,6 @@ client.once(Events.ClientReady, () => {
     console.log('📂 __dirname:', __dirname);
 
     console.log(
-      '📂 Contenido de /data:',
-      fs.existsSync('/data') ? fs.readdirSync('/data') : 'NO EXISTE'
-    );
-
-    console.log(
-      '📂 Contenido de /data/storage:',
-      fs.existsSync('/data/storage') ? fs.readdirSync('/data/storage') : 'NO EXISTE'
-    );
-
-    console.log(
-      '📂 Contenido de /data/app:',
-      fs.existsSync('/data/app') ? fs.readdirSync('/data/app') : 'NO EXISTE'
-    );
-
-    console.log(
-      '📂 Contenido de /data/app/storage:',
-      fs.existsSync('/data/app/storage') ? fs.readdirSync('/data/app/storage') : 'NO EXISTE'
-    );
-
-    console.log(
       '📂 Contenido de la carpeta del proyecto:',
       fs.existsSync(__dirname) ? fs.readdirSync(__dirname) : 'NO EXISTE'
     );
@@ -1135,6 +1131,10 @@ client.once(Events.ClientReady, () => {
     console.log('🔎 Existe quinielas.json:', fs.existsSync(ARCHIVO));
     console.log('🔎 Existe jornadas.json:', fs.existsSync(ARCHIVO_JORNADAS));
     console.log('========================================');
+
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
 
     if (!fs.existsSync(ARCHIVO)) {
       throw new Error(`No existe quinielas.json en: ${ARCHIVO}`);
@@ -1558,11 +1558,29 @@ client.on(Events.InteractionCreate, async interaction => {
       }
     }
   } catch (error) {
-    console.error('Error en interacción:', error);
+    console.error('========== ERROR EN INTERACCIÓN ==========');
+    console.error('Comando:', interaction.commandName || interaction.customId);
+    console.error('Usuario:', interaction.user?.tag);
+    console.error(error);
+    console.error(error.stack);
+    console.error('==========================================');
 
-    if (!interaction.replied && !interaction.deferred) {
+    const mensaje =
+      `❌ Ha ocurrido un error.\n` +
+      `**Detalle:** \`${String(error.message || error).slice(0, 1200)}\``;
+
+    if (interaction.deferred) {
+      await interaction.editReply({
+        content: mensaje
+      }).catch(() => {});
+    } else if (interaction.replied) {
+      await interaction.followUp({
+        content: mensaje,
+        ephemeral: true
+      }).catch(() => {});
+    } else {
       await interaction.reply({
-        content: '❌ Ha ocurrido un error. Inténtalo de nuevo.',
+        content: mensaje,
         ephemeral: true
       }).catch(() => {});
     }
