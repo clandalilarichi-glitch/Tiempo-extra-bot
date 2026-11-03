@@ -1,3 +1,4 @@
+
 const fs = require('fs');
 const path = require('path');
 
@@ -22,6 +23,7 @@ const DATA_DIR = path.join(__dirname, 'storage');
 const ARCHIVO = path.join(DATA_DIR, 'quinielas.json');
 const ARCHIVO_JORNADAS = path.join(DATA_DIR, 'jornadas.json');
 const CANAL_JORNADAS = '1552467310441402450';
+const ZONA_HORARIA = 'Europe/Madrid';
 
 let configuracionJornadas;
 let JORNADA = null;
@@ -33,7 +35,169 @@ let pleno = [];
 let quinielasGuardadas = {};
 const pronosticos = new Map();
 
+// ==========================================
+// FECHAS Y HORARIOS DE MADRID
+// ==========================================
+
+// Convierte DD/MM/AAAA HH:mm a una fecha ISO.
+// Rechaza fechas inexistentes y horas ambiguas por cambio horario.
+function convertirFechaMadrid(texto) {
+  const coincidencia = /^(\d{2})\/(\d{2})\/(\d{4}) (\d{2}):(\d{2})$/.exec(
+    String(texto || '').trim()
+  );
+
+  if (!coincidencia) {
+    throw new Error(
+      'Formato incorrecto. Utiliza DD/MM/AAAA HH:mm. Ejemplo: 15/11/2026 18:30'
+    );
+  }
+
+  const dia = Number(coincidencia[1]);
+  const mes = Number(coincidencia[2]);
+  const anio = Number(coincidencia[3]);
+  const hora = Number(coincidencia[4]);
+  const minuto = Number(coincidencia[5]);
+
+  if (
+    anio < 2020 ||
+    mes < 1 ||
+    mes > 12 ||
+    dia < 1 ||
+    hora < 0 ||
+    hora > 23 ||
+    minuto < 0 ||
+    minuto > 59
+  ) {
+    throw new Error('La fecha o la hora indicada no es válida.');
+  }
+
+  const fechaBase = new Date(Date.UTC(anio, mes - 1, dia, hora, minuto));
+
+  if (
+    fechaBase.getUTCFullYear() !== anio ||
+    fechaBase.getUTCMonth() !== mes - 1 ||
+    fechaBase.getUTCDate() !== dia
+  ) {
+    throw new Error('El día indicado no existe en ese mes.');
+  }
+
+  const formato = new Intl.DateTimeFormat('en-GB', {
+    timeZone: ZONA_HORARIA,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23'
+  });
+
+  const posiblesOffsets = [60, 120];
+  const coincidenciasValidas = [];
+
+  for (const offset of posiblesOffsets) {
+    const candidato = new Date(
+      fechaBase.getTime() - offset * 60 * 1000
+    );
+
+    const partesFecha = formato.formatToParts(candidato);
+    const valores = {};
+
+    for (const parte of partesFecha) {
+      if (parte.type !== 'literal') {
+        valores[parte.type] = parte.value;
+      }
+    }
+
+    if (
+      Number(valores.year) === anio &&
+      Number(valores.month) === mes &&
+      Number(valores.day) === dia &&
+      Number(valores.hour) === hora &&
+      Number(valores.minute) === minuto
+    ) {
+      coincidenciasValidas.push(candidato);
+    }
+  }
+
+  if (coincidenciasValidas.length === 0) {
+    throw new Error(
+      'Esa hora no existe en Madrid por el cambio de horario. Elige otra hora.'
+    );
+  }
+
+  if (coincidenciasValidas.length > 1) {
+    throw new Error(
+      'Esa hora es ambigua por el cambio de horario de otoño. Elige otra hora.'
+    );
+  }
+
+  return coincidenciasValidas[0].toISOString();
+}
+
+// Comprueba apertura y cierre de una jornada.
+function comprobarHorarioJornada(jornada = datosJornada) {
+  // Compatibilidad con jornadas antiguas que no tienen horario.
+  if (!jornada || !jornada.apertura || !jornada.cierre) {
+    return { permitido: true, mensaje: null };
+  }
+
+  const apertura = Date.parse(jornada.apertura);
+  const cierre = Date.parse(jornada.cierre);
+  const ahora = Date.now();
+
+  if (
+    !Number.isFinite(apertura) ||
+    !Number.isFinite(cierre) ||
+    cierre <= apertura
+  ) {
+    return {
+      permitido: false,
+      mensaje: '⚠️ El horario de esta jornada no está configurado correctamente. Contacta con un administrador.'
+    };
+  }
+
+  if (ahora < apertura) {
+    return {
+      permitido: false,
+      mensaje:
+        `⏳ **Los pronósticos todavía no están abiertos.**\n` +
+        `Apertura: <t:${Math.floor(apertura / 1000)}:F>\n` +
+        `Podrás enviar tu quiniela cuando llegue esa hora.`
+    };
+  }
+
+  if (ahora >= cierre) {
+    return {
+      permitido: false,
+      mensaje:
+        `🔒 **El plazo para enviar pronósticos ha terminado.**\n` +
+        `El cierre fue: <t:${Math.floor(cierre / 1000)}:F>\n` +
+        `Ya no se aceptan nuevas quinielas.`
+    };
+  }
+
+  return { permitido: true, mensaje: null };
+}
+
+// Texto de horario para los anuncios.
+function textoHorario(jornada) {
+  if (!jornada?.apertura || !jornada?.cierre) {
+    return '⏰ Horario no configurado.';
+  }
+
+  const apertura = Math.floor(Date.parse(jornada.apertura) / 1000);
+  const cierre = Math.floor(Date.parse(jornada.cierre) / 1000);
+
+  return (
+    `🟢 **Apertura:** <t:${apertura}:F>\n` +
+    `🔴 **Cierre:** <t:${cierre}:F>`
+  );
+}
+
+// ==========================================
 // COMPROBAR SI HAY JORNADA ACTIVA
+// ==========================================
+
 function hayJornadaActiva() {
   return Boolean(
     JORNADA &&
@@ -45,7 +209,10 @@ function hayJornadaActiva() {
   );
 }
 
+// ==========================================
 // CARGAR CONFIGURACIÓN DE JORNADAS
+// ==========================================
+
 function cargarConfiguracionJornadas() {
   if (!fs.existsSync(ARCHIVO_JORNADAS)) {
     throw new Error(`No existe el archivo: ${ARCHIVO_JORNADAS}`);
@@ -111,7 +278,10 @@ function guardarConfiguracionJornadas() {
   fs.renameSync(temporal, ARCHIVO_JORNADAS);
 }
 
+// ==========================================
 // CARGAR DATOS DE QUINIELAS
+// ==========================================
+
 function cargarQuinielas() {
   if (!fs.existsSync(ARCHIVO)) {
     throw new Error(`No existe el archivo: ${ARCHIVO}`);
@@ -156,7 +326,10 @@ function guardarQuinielas() {
   fs.renameSync(temporal, ARCHIVO);
 }
 
-// COMPROBAR ADMINISTRADOR
+// ==========================================
+// PERMISOS
+// ==========================================
+
 function esAdministrador(interaction) {
   return Boolean(
     interaction.memberPermissions?.has(
@@ -165,7 +338,6 @@ function esAdministrador(interaction) {
   );
 }
 
-// COMPROBAR JORNADA ACTIVA
 async function exigirJornadaActiva(interaction) {
   if (hayJornadaActiva()) return true;
 
@@ -179,7 +351,10 @@ async function exigirJornadaActiva(interaction) {
   return false;
 }
 
-// CREAR IDENTIFICADOR
+// ==========================================
+// IDENTIFICADOR Y PARTIDOS
+// ==========================================
+
 function crearIdJornada(nombre) {
   const base = nombre
     .normalize('NFD')
@@ -192,7 +367,6 @@ function crearIdJornada(nombre) {
   return `${base}-${Date.now().toString().slice(-8)}`;
 }
 
-// SEPARAR PARTIDO
 function separarPartido(texto, numero) {
   const separador = texto.indexOf('-');
 
@@ -212,12 +386,16 @@ function separarPartido(texto, numero) {
   return [local, visitante];
 }
 
+// ==========================================
 // EMBED DE JORNADA
+// ==========================================
+
 function crearEmbedJornada(
   nombre,
   listaPartidos,
   equipoPleno,
-  estado = 'pendiente'
+  estado = 'pendiente',
+  jornada = null
 ) {
   const embed = new EmbedBuilder()
     .setColor(
@@ -246,10 +424,20 @@ function crearEmbedJornada(
     value: `${equipoPleno[0]} - ${equipoPleno[1]}`
   });
 
+  if (jornada?.apertura && jornada?.cierre) {
+    embed.addFields({
+      name: '⏰ Horario de pronósticos',
+      value: textoHorario(jornada)
+    });
+  }
+
   return embed;
 }
 
+// ==========================================
 // BOTONES DE APROBACIÓN
+// ==========================================
+
 function botonesJornada(id, desactivados = false) {
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder()
@@ -268,9 +456,11 @@ function botonesJornada(id, desactivados = false) {
   );
 }
 
-// CREAR JORNADA — CORREGIDO
+// ==========================================
+// CREAR JORNADA
+// ==========================================
+
 async function crearJornadaDesdeComando(interaction) {
-  // Responder inmediatamente para evitar que caduque la interacción.
   await interaction.deferReply({ ephemeral: true });
 
   try {
@@ -297,6 +487,21 @@ async function crearJornadaDesdeComando(interaction) {
       return;
     }
 
+    // NUEVOS CAMPOS DE HORARIO
+    const textoApertura = interaction.options.getString('apertura', true);
+    const textoCierre = interaction.options.getString('cierre', true);
+
+    const apertura = convertirFechaMadrid(textoApertura);
+    const cierre = convertirFechaMadrid(textoCierre);
+
+    if (Date.parse(cierre) <= Date.parse(apertura)) {
+      throw new Error('La fecha de cierre debe ser posterior a la apertura.');
+    }
+
+    if (Date.parse(cierre) <= Date.now()) {
+      throw new Error('La fecha de cierre debe ser futura.');
+    }
+
     const listaPartidos = [];
 
     for (let i = 1; i <= 14; i++) {
@@ -318,8 +523,20 @@ async function crearJornadaDesdeComando(interaction) {
 
     const id = crearIdJornada(nombre);
 
+    const datos = {
+      nombre,
+      estado: 'pendiente',
+      fecha: null,
+      fuente: 'manual',
+      apertura,
+      cierre,
+      partidos: listaPartidos,
+      pleno: equipoPleno
+    };
+
     console.log('📋 Preparando jornada:', nombre);
-    console.log('🔎 Buscando canal:', CANAL_JORNADAS);
+    console.log('🟢 Apertura:', apertura);
+    console.log('🔴 Cierre:', cierre);
 
     const canal = await client.channels.fetch(CANAL_JORNADAS);
 
@@ -333,7 +550,9 @@ async function crearJornadaDesdeComando(interaction) {
     const embed = crearEmbedJornada(
       nombre,
       listaPartidos,
-      equipoPleno
+      equipoPleno,
+      'pendiente',
+      datos
     );
 
     const mensaje = await canal.send({
@@ -344,14 +563,7 @@ async function crearJornadaDesdeComando(interaction) {
 
     configuracionJornadas.jornadaPendiente = {
       id,
-      datos: {
-        nombre,
-        estado: 'pendiente',
-        fecha: null,
-        fuente: 'manual',
-        partidos: listaPartidos,
-        pleno: equipoPleno
-      },
+      datos,
       creadaPor: interaction.user.id,
       creadaEn: new Date().toISOString(),
       mensajeId: mensaje.id,
@@ -376,7 +588,10 @@ async function crearJornadaDesdeComando(interaction) {
     }
 
     await interaction.editReply(
-      `✅ Vista previa publicada en <#${CANAL_JORNADAS}>. La jornada **${nombre}** necesita aprobación.`
+      `✅ Vista previa publicada en <#${CANAL_JORNADAS}>.\n` +
+      `La jornada **${nombre}** necesita aprobación.\n\n` +
+      `🟢 Apertura: <t:${Math.floor(Date.parse(apertura) / 1000)}:F>\n` +
+      `🔴 Cierre: <t:${Math.floor(Date.parse(cierre) / 1000)}:F>`
     );
 
     console.log(`✅ Jornada propuesta correctamente: ${nombre}`);
@@ -394,7 +609,10 @@ async function crearJornadaDesdeComando(interaction) {
   }
 }
 
+// ==========================================
 // APROBAR O RECHAZAR JORNADA
+// ==========================================
+
 async function gestionarJornada(interaction) {
   if (!esAdministrador(interaction)) {
     await interaction.reply({
@@ -470,7 +688,13 @@ async function gestionarJornada(interaction) {
     await interaction.update({
       content: '✅ **Jornada aprobada.**',
       embeds: [
-        crearEmbedJornada(NOMBRE_JORNADA, partidos, pleno, 'aprobada')
+        crearEmbedJornada(
+          NOMBRE_JORNADA,
+          partidos,
+          pleno,
+          'aprobada',
+          datosJornada
+        )
       ],
       components: [botonesJornada(id, true)]
     });
@@ -478,8 +702,9 @@ async function gestionarJornada(interaction) {
     await interaction.channel.send({
       content:
         `🏆 **¡Nueva jornada activa en Tiempo Extra!**\n` +
-        `⚽ **${NOMBRE_JORNADA}**\n` +
-        `Ya podéis utilizar \`/quiniela\` para enviar vuestros pronósticos.`
+        `⚽ **${NOMBRE_JORNADA}**\n\n` +
+        `${textoHorario(datosJornada)}\n\n` +
+        `Ya podéis utilizar \`/quiniela\` dentro del horario establecido.`
     }).catch(console.error);
 
     console.log(`✅ Jornada activada: ${JORNADA}`);
@@ -521,7 +746,8 @@ async function gestionarJornada(interaction) {
           pendiente.datos.nombre,
           pendiente.datos.partidos,
           pendiente.datos.pleno,
-          'rechazada'
+          'rechazada',
+          pendiente.datos
         )
       ],
       components: [botonesJornada(id, true)]
@@ -529,7 +755,10 @@ async function gestionarJornada(interaction) {
   }
 }
 
+// ==========================================
 // ESTADO DEL USUARIO
+// ==========================================
+
 function obtenerEstado(userId) {
   if (!pronosticos.has(userId)) {
     pronosticos.set(userId, {
@@ -543,7 +772,10 @@ function obtenerEstado(userId) {
   return pronosticos.get(userId);
 }
 
+// ==========================================
 // MENÚ DE SELECCIÓN
+// ==========================================
+
 function crearMenu(id, placeholder, opciones, seleccionado) {
   return new StringSelectMenuBuilder()
     .setCustomId(id)
@@ -557,7 +789,10 @@ function crearMenu(id, placeholder, opciones, seleccionado) {
     );
 }
 
+// ==========================================
 // PANTALLA DE QUINIELA
+// ==========================================
+
 function crearPantalla(userId, pagina) {
   const estado = obtenerEstado(userId);
   estado.pagina = pagina;
@@ -567,7 +802,8 @@ function crearPantalla(userId, pagina) {
     .setTitle('⚽ QUINIELA | TIEMPO EXTRA')
     .setDescription(
       `**${NOMBRE_JORNADA}**\n` +
-      `Selecciona tus pronósticos.\nPágina ${pagina + 1} de 4`
+      `Selecciona tus pronósticos.\nPágina ${pagina + 1} de 4\n\n` +
+      `${textoHorario(datosJornada)}`
     );
 
   const filas = [];
@@ -654,7 +890,10 @@ function crearPantalla(userId, pagina) {
   };
 }
 
+// ==========================================
 // CONSULTAR PRONÓSTICOS
+// ==========================================
+
 async function mostrarPronosticos(interaction) {
   const guardada =
     quinielasGuardadas[JORNADA]?.[interaction.user.id];
@@ -705,7 +944,10 @@ async function mostrarPronosticos(interaction) {
   });
 }
 
+// ==========================================
 // CALCULAR RESULTADOS
+// ==========================================
+
 function calcularJornada(resultados) {
   if (
     !resultados ||
@@ -792,7 +1034,10 @@ function calcularJornada(resultados) {
   return clasificacion;
 }
 
+// ==========================================
 // REPARTIR PREMIOS
+// ==========================================
+
 function repartirPremiosJornada() {
   const resultados =
     quinielasGuardadas._resultados[JORNADA];
@@ -841,7 +1086,10 @@ function repartirPremiosJornada() {
   return { clasificacion, error: null };
 }
 
+// ==========================================
 // CLASIFICACIÓN
+// ==========================================
+
 async function mostrarClasificacion(interaction) {
   const resultados =
     quinielasGuardadas._resultados[JORNADA];
@@ -883,7 +1131,10 @@ async function mostrarClasificacion(interaction) {
   });
 }
 
+// ==========================================
 // MOSTRAR JORNADAS
+// ==========================================
+
 async function mostrarJornadas(interaction) {
   const jornadas = configuracionJornadas.jornadas || {};
   const activa = configuracionJornadas.jornadaActiva;
@@ -922,6 +1173,10 @@ async function mostrarJornadas(interaction) {
               ? new Date(jornada.fechaActivacion).toLocaleDateString('es-ES')
               : 'No registrada'
           }\n` +
+          (jornada.apertura && jornada.cierre
+            ? `**Apertura:** <t:${Math.floor(Date.parse(jornada.apertura) / 1000)}:F>\n` +
+              `**Cierre:** <t:${Math.floor(Date.parse(jornada.cierre) / 1000)}:F>\n`
+            : '') +
           `**ID:** \`${id}\``
       });
     }
@@ -942,7 +1197,10 @@ async function mostrarJornadas(interaction) {
   });
 }
 
+// ==========================================
 // MENÚ PARA ELIMINAR JORNADA
+// ==========================================
+
 async function mostrarEliminarJornada(interaction) {
   if (!esAdministrador(interaction)) {
     await interaction.reply({
@@ -986,7 +1244,10 @@ async function mostrarEliminarJornada(interaction) {
   });
 }
 
+// ==========================================
 // ELIMINAR JORNADA
+// ==========================================
+
 async function confirmarEliminarJornada(interaction, id) {
   if (!esAdministrador(interaction)) {
     await interaction.reply({
@@ -1113,7 +1374,10 @@ async function confirmarEliminarJornada(interaction, id) {
   }
 }
 
+// ==========================================
 // BOT CONECTADO Y DIAGNÓSTICO FADEHOST
+// ==========================================
+
 client.once(Events.ClientReady, () => {
   try {
     console.log('========== DIAGNÓSTICO FADEHOST ==========');
@@ -1152,6 +1416,12 @@ client.once(Events.ClientReady, () => {
     if (hayJornadaActiva()) {
       console.log(`📋 Jornada activa: ${NOMBRE_JORNADA}`);
       console.log(`⚽ Partidos cargados: ${partidos.length + 1}`);
+
+      if (datosJornada.apertura && datosJornada.cierre) {
+        console.log('⏰ Horario:', textoHorario(datosJornada));
+      } else {
+        console.log('⚠️ Esta jornada antigua no tiene horario configurado.');
+      }
     } else {
       console.log('⚠️ El bot está conectado sin jornada activa.');
     }
@@ -1163,13 +1433,29 @@ client.once(Events.ClientReady, () => {
   }
 });
 
+// ==========================================
 // INTERACCIONES
+// ==========================================
+
 client.on(Events.InteractionCreate, async interaction => {
   try {
+    // ======================================
     // COMANDOS
+    // ======================================
+
     if (interaction.isChatInputCommand()) {
       if (interaction.commandName === 'quiniela') {
         if (!await exigirJornadaActiva(interaction)) return;
+
+        const horario = comprobarHorarioJornada();
+
+        if (!horario.permitido) {
+          await interaction.reply({
+            content: horario.mensaje,
+            ephemeral: true
+          });
+          return;
+        }
 
         if (quinielasGuardadas._resultados[JORNADA]) {
           await interaction.reply({
@@ -1223,7 +1509,10 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
+      // ====================================
       // RESULTADOS
+      // ====================================
+
       if (interaction.commandName === 'resultados') {
         if (!esAdministrador(interaction)) {
           await interaction.reply({
@@ -1283,7 +1572,10 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
+      // ====================================
       // REPARTIR PREMIOS
+      // ====================================
+
       if (interaction.commandName === 'repartirpremios') {
         if (!esAdministrador(interaction)) {
           await interaction.reply({
@@ -1332,7 +1624,10 @@ client.on(Events.InteractionCreate, async interaction => {
       }
     }
 
+    // ======================================
     // APROBAR / RECHAZAR JORNADA
+    // ======================================
+
     if (
       interaction.isButton() &&
       (
@@ -1344,7 +1639,10 @@ client.on(Events.InteractionCreate, async interaction => {
       return;
     }
 
+    // ======================================
     // SELECTOR PARA ELIMINAR JORNADA
+    // ======================================
+
     if (
       interaction.isStringSelectMenu() &&
       interaction.customId === 'seleccionar_eliminar_jornada'
@@ -1391,7 +1689,10 @@ client.on(Events.InteractionCreate, async interaction => {
       return;
     }
 
+    // ======================================
     // CONFIRMAR O CANCELAR ELIMINACIÓN
+    // ======================================
+
     if (
       interaction.isButton() &&
       (
@@ -1420,11 +1721,24 @@ client.on(Events.InteractionCreate, async interaction => {
       return;
     }
 
+    // ======================================
     // MENÚS DE QUINIELA
+    // ======================================
+
     if (interaction.isStringSelectMenu()) {
       if (!hayJornadaActiva()) {
         await interaction.reply({
           content: '⚠️ No hay ninguna jornada activa. Espera a que se apruebe una nueva.',
+          ephemeral: true
+        });
+        return;
+      }
+
+      const horario = comprobarHorarioJornada();
+
+      if (!horario.permitido) {
+        await interaction.reply({
+          content: horario.mensaje,
           ephemeral: true
         });
         return;
@@ -1443,6 +1757,15 @@ client.on(Events.InteractionCreate, async interaction => {
 
       if (interaction.customId.startsWith('partido_')) {
         const numero = Number(interaction.customId.split('_')[1]);
+
+        if (numero < 1 || numero > 14) {
+          await interaction.reply({
+            content: '⚠️ Partido no válido.',
+            ephemeral: true
+          });
+          return;
+        }
+
         estado.partidos[numero] = valor;
       }
 
@@ -1460,11 +1783,24 @@ client.on(Events.InteractionCreate, async interaction => {
       return;
     }
 
+    // ======================================
     // BOTONES DE QUINIELA
+    // ======================================
+
     if (interaction.isButton()) {
       if (!hayJornadaActiva()) {
         await interaction.reply({
           content: '⚠️ No hay ninguna jornada activa.',
+          ephemeral: true
+        });
+        return;
+      }
+
+      const horario = comprobarHorarioJornada();
+
+      if (!horario.permitido) {
+        await interaction.reply({
+          content: horario.mensaje,
           ephemeral: true
         });
         return;
@@ -1501,6 +1837,17 @@ client.on(Events.InteractionCreate, async interaction => {
       }
 
       if (interaction.customId === 'confirmar') {
+        // SEGUNDA COMPROBACIÓN JUSTO ANTES DE GUARDAR
+        const horarioConfirmacion = comprobarHorarioJornada();
+
+        if (!horarioConfirmacion.permitido) {
+          await interaction.reply({
+            content: horarioConfirmacion.mensaje,
+            ephemeral: true
+          });
+          return;
+        }
+
         const completos = partidos.every(
           (_, i) => estado.partidos[i + 1]
         );
