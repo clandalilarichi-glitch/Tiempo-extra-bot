@@ -4,8 +4,7 @@ require('dotenv').config();
 const {
   REST,
   Routes,
-  SlashCommandBuilder,
-  PermissionFlagsBits
+  SlashCommandBuilder
 } = require('discord.js');
 
 const comandos = [
@@ -26,7 +25,36 @@ const comandos = [
   // 🏆 Jornadas
   new SlashCommandBuilder()
     .setName('crearjornada')
-    .setDescription('Crear una nueva jornada'),
+    .setDescription('Crear una nueva jornada')
+    .addStringOption(option =>
+      option.setName('nombre')
+        .setDescription('Nombre de la jornada')
+        .setRequired(true)
+    )
+    .addStringOption(option => option.setName('partido1').setDescription('Partido 1: Local - Visitante').setRequired(true))
+    .addStringOption(option => option.setName('partido2').setDescription('Partido 2: Local - Visitante').setRequired(true))
+    .addStringOption(option => option.setName('partido3').setDescription('Partido 3: Local - Visitante').setRequired(true))
+    .addStringOption(option => option.setName('partido4').setDescription('Partido 4: Local - Visitante').setRequired(true))
+    .addStringOption(option => option.setName('partido5').setDescription('Partido 5: Local - Visitante').setRequired(true))
+    .addStringOption(option => option.setName('partido6').setDescription('Partido 6: Local - Visitante').setRequired(true))
+    .addStringOption(option => option.setName('partido7').setDescription('Partido 7: Local - Visitante').setRequired(true))
+    .addStringOption(option => option.setName('partido8').setDescription('Partido 8: Local - Visitante').setRequired(true))
+    .addStringOption(option => option.setName('partido9').setDescription('Partido 9: Local - Visitante').setRequired(true))
+    .addStringOption(option => option.setName('partido10').setDescription('Partido 10: Local - Visitante').setRequired(true))
+    .addStringOption(option => option.setName('partido11').setDescription('Partido 11: Local - Visitante').setRequired(true))
+    .addStringOption(option => option.setName('partido12').setDescription('Partido 12: Local - Visitante').setRequired(true))
+    .addStringOption(option => option.setName('partido13').setDescription('Partido 13: Local - Visitante').setRequired(true))
+    .addStringOption(option => option.setName('partido14').setDescription('Partido 14: Local - Visitante').setRequired(true))
+    .addStringOption(option =>
+      option.setName('pleno_local')
+        .setDescription('Equipo local del Pleno al 15')
+        .setRequired(true)
+    )
+    .addStringOption(option =>
+      option.setName('pleno_visitante')
+        .setDescription('Equipo visitante del Pleno al 15')
+        .setRequired(true)
+    ),
 
   new SlashCommandBuilder()
     .setName('jornadas')
