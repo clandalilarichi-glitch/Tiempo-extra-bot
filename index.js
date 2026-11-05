@@ -1,4 +1,3 @@
-
 const fs = require('fs');
 const path = require('path');
 
@@ -39,8 +38,6 @@ const pronosticos = new Map();
 // FECHAS Y HORARIOS DE MADRID
 // ==========================================
 
-// Convierte DD/MM/AAAA HH:mm a una fecha ISO.
-// Rechaza fechas inexistentes y horas ambiguas por cambio horario.
 function convertirFechaMadrid(texto) {
   const coincidencia = /^(\d{2})\/(\d{2})\/(\d{4}) (\d{2}):(\d{2})$/.exec(
     String(texto || '').trim()
@@ -134,9 +131,7 @@ function convertirFechaMadrid(texto) {
   return coincidenciasValidas[0].toISOString();
 }
 
-// Comprueba apertura y cierre de una jornada.
 function comprobarHorarioJornada(jornada = datosJornada) {
-  // Compatibilidad con jornadas antiguas que no tienen horario.
   if (!jornada || !jornada.apertura || !jornada.cierre) {
     return { permitido: true, mensaje: null };
   }
@@ -179,7 +174,6 @@ function comprobarHorarioJornada(jornada = datosJornada) {
   return { permitido: true, mensaje: null };
 }
 
-// Texto de horario para los anuncios.
 function textoHorario(jornada) {
   if (!jornada?.apertura || !jornada?.cierre) {
     return '⏰ Horario no configurado.';
@@ -487,7 +481,6 @@ async function crearJornadaDesdeComando(interaction) {
       return;
     }
 
-    // NUEVOS CAMPOS DE HORARIO
     const textoApertura = interaction.options.getString('apertura', true);
     const textoCierre = interaction.options.getString('cierre', true);
 
@@ -754,7 +747,6 @@ async function gestionarJornada(interaction) {
     });
   }
 }
-
 // ==========================================
 // ESTADO DEL USUARIO
 // ==========================================
@@ -1132,6 +1124,129 @@ async function mostrarClasificacion(interaction) {
 }
 
 // ==========================================
+// TOP GENERAL DE TODAS LAS JORNADAS
+// ==========================================
+
+function obtenerTopGeneral() {
+  const jugadores = {};
+
+  for (const [idJornada, participantes] of Object.entries(quinielasGuardadas)) {
+    if (idJornada.startsWith('_')) continue;
+    if (!participantes || typeof participantes !== 'object') continue;
+
+    for (const [userId, apuesta] of Object.entries(participantes)) {
+      if (!apuesta || typeof apuesta !== 'object') continue;
+      if (!apuesta.partidos || typeof apuesta.partidos !== 'object') continue;
+      if (apuesta.puntosCalculados !== true) continue;
+
+      if (!jugadores[userId]) {
+        jugadores[userId] = {
+          userId,
+          usuario: apuesta.usuario || 'Usuario',
+          puntos: 0,
+          monedas: 0,
+          premios: 0,
+          jornadas: 0
+        };
+      }
+
+      const jugador = jugadores[userId];
+
+      jugador.usuario = apuesta.usuario || jugador.usuario;
+      jugador.puntos += Number(apuesta.puntos || 0);
+      jugador.monedas += Number(apuesta.monedas || 0);
+      jugador.premios += Number(apuesta.premioJornada || 0);
+      jugador.jornadas++;
+    }
+  }
+
+  return Object.values(jugadores).sort((a, b) =>
+    b.puntos - a.puntos ||
+    (b.monedas + b.premios) - (a.monedas + a.premios) ||
+    a.usuario.localeCompare(b.usuario)
+  );
+}
+
+function crearEmbedTop(lista, pagina) {
+  const porPagina = 10;
+  const inicio = pagina * porPagina;
+  const jugadores = lista.slice(inicio, inicio + porPagina);
+  const totalPaginas = Math.max(1, Math.ceil(lista.length / porPagina));
+
+  const embed = new EmbedBuilder()
+    .setColor(0xFFD700)
+    .setTitle('🏆 TOP GENERAL | TIEMPO EXTRA')
+    .setDescription(
+      `Clasificación acumulada de todas las jornadas finalizadas.\n` +
+      `👥 Participantes: **${lista.length}**\n` +
+      `📄 Página **${pagina + 1}/${totalPaginas}**`
+    );
+
+  if (jugadores.length === 0) {
+    embed.addFields({
+      name: '📭 Sin participantes',
+      value: 'Todavía no hay resultados calculados.'
+    });
+
+    return embed;
+  }
+
+  const lineas = jugadores.map((jugador, i) => {
+    const posicion = inicio + i + 1;
+    const medalla = posicion === 1
+      ? '🥇'
+      : posicion === 2
+        ? '🥈'
+        : posicion === 3
+          ? '🥉'
+          : '🏅';
+
+    return (
+      `${medalla} **${posicion}. ${jugador.usuario.slice(0, 35)}**\n` +
+      `   ⭐ ${jugador.puntos} puntos · 💰 ${jugador.monedas + jugador.premios} monedas\n` +
+      `   🏟️ ${jugador.jornadas} jornadas participadas`
+    );
+  });
+
+  embed.addFields({
+    name: '📊 Clasificación',
+    value: lineas.join('\n\n')
+  });
+
+  return embed;
+}
+
+function crearBotonesTop(userId, pagina, totalPaginas) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`top_pagina:${userId}:${pagina - 1}`)
+      .setLabel('Anterior')
+      .setEmoji('⬅️')
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(pagina <= 0),
+
+    new ButtonBuilder()
+      .setCustomId(`top_pagina:${userId}:${pagina + 1}`)
+      .setLabel('Siguiente')
+      .setEmoji('➡️')
+      .setStyle(ButtonStyle.Primary)
+      .setDisabled(pagina >= totalPaginas - 1)
+  );
+}
+
+async function mostrarTop(interaction, pagina = 0) {
+  const lista = obtenerTopGeneral();
+  const totalPaginas = Math.max(1, Math.ceil(lista.length / 10));
+
+  await interaction.reply({
+    embeds: [crearEmbedTop(lista, pagina)],
+    components: [
+      crearBotonesTop(interaction.user.id, pagina, totalPaginas)
+    ],
+    ephemeral: false
+  });
+}
+// ==========================================
 // MOSTRAR JORNADAS
 // ==========================================
 
@@ -1432,7 +1547,6 @@ client.once(Events.ClientReady, () => {
     process.exit(1);
   }
 });
-
 // ==========================================
 // INTERACCIONES
 // ==========================================
@@ -1491,6 +1605,15 @@ client.on(Events.InteractionCreate, async interaction => {
       if (interaction.commandName === 'clasificacion') {
         if (!await exigirJornadaActiva(interaction)) return;
         await mostrarClasificacion(interaction);
+        return;
+      }
+
+      // ====================================
+      // NUEVO COMANDO TOP GENERAL
+      // ====================================
+
+      if (interaction.commandName === 'top') {
+        await mostrarTop(interaction);
         return;
       }
 
@@ -1722,6 +1845,56 @@ client.on(Events.InteractionCreate, async interaction => {
     }
 
     // ======================================
+    // PAGINACIÓN DEL TOP GENERAL
+    // ======================================
+
+    if (
+      interaction.isButton() &&
+      interaction.customId.startsWith('top_pagina:')
+    ) {
+      const [, propietario, paginaTexto] =
+        interaction.customId.split(':');
+
+      if (propietario !== interaction.user.id) {
+        await interaction.reply({
+          content: '⚠️ Solo quien ha abierto el TOP puede cambiar de página.',
+          ephemeral: true
+        });
+        return;
+      }
+
+      const pagina = Number(paginaTexto);
+
+      if (!Number.isInteger(pagina) || pagina < 0) {
+        await interaction.reply({
+          content: '⚠️ Página no válida.',
+          ephemeral: true
+        });
+        return;
+      }
+
+      const lista = obtenerTopGeneral();
+      const totalPaginas = Math.max(1, Math.ceil(lista.length / 10));
+
+      if (pagina >= totalPaginas) {
+        await interaction.reply({
+          content: '⚠️ Esa página ya no existe.',
+          ephemeral: true
+        });
+        return;
+      }
+
+      await interaction.update({
+        embeds: [crearEmbedTop(lista, pagina)],
+        components: [
+          crearBotonesTop(interaction.user.id, pagina, totalPaginas)
+        ]
+      });
+
+      return;
+    }
+
+    // ======================================
     // MENÚS DE QUINIELA
     // ======================================
 
@@ -1837,7 +2010,6 @@ client.on(Events.InteractionCreate, async interaction => {
       }
 
       if (interaction.customId === 'confirmar') {
-        // SEGUNDA COMPROBACIÓN JUSTO ANTES DE GUARDAR
         const horarioConfirmacion = comprobarHorarioJornada();
 
         if (!horarioConfirmacion.permitido) {
