@@ -22,6 +22,10 @@ const comandos = [
     .setDescription('Ver la clasificación de la quiniela'),
 
   new SlashCommandBuilder()
+    .setName('top')
+    .setDescription('Ver el TOP general de todas las jornadas'),
+
+  new SlashCommandBuilder()
     .setName('crearjornada')
     .setDescription('Crear una nueva jornada')
     .addStringOption(o => o.setName('nombre').setDescription('Nombre de la jornada').setRequired(true))
